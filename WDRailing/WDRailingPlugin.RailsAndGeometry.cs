@@ -98,6 +98,7 @@ namespace WDRailing
             public bool IsInsideCorner;
             public double RailCenterZ;
             public double HalfRailDepthMm;
+            public string CornerClass;
         }
 
         private sealed class CornerFitSpec
@@ -244,18 +245,6 @@ namespace WDRailing
                         out Point optNextCapFacePoint,
                         out Vector optNextCapFaceNormal);
 
-                    if (optPrevCapOk)
-                    {
-                        if (Distance3D(optNextStart, ends[next]) < 1.0)
-                            optPrevCapOk = false;
-                    }
-
-                    if (optNextCapOk)
-                    {
-                        if (Distance3D(starts[prev], optPrevEnd) < 1.0)
-                            optNextCapOk = false;
-                    }
-
                     bool choosePrevCap = false;
                     bool chooseNextCap = false;
 
@@ -316,6 +305,8 @@ namespace WDRailing
                         lateral = 1.0; // stable fallback
 
                     bool isInside = (turn * lateral) < 0.0;
+                    bool leftTurn = turn >= 0.0;
+                    string cornerClass = GetCornerDebugClass(leftTurn, isInside);
 
                     // Corner reference from centerline intersection.
                     Point cornerPt;
@@ -339,7 +330,8 @@ namespace WDRailing
                         NextDir = nextDir,
                         IsInsideCorner = isInside,
                         RailCenterZ = cornerPt.Z,
-                        HalfRailDepthMm = halfRailWidthMm
+                        HalfRailDepthMm = halfRailWidthMm,
+                        CornerClass = cornerClass
                     });
                 }
 
@@ -375,6 +367,7 @@ namespace WDRailing
 
                     Beam target = fit.AtStart ? firstPieceBySide[fit.SideIndex] : lastPieceBySide[fit.SideIndex];
                     TryApplyEndFitting(target, fit.FacePoint, fit.FaceNormal);
+                    TryForceBeamEndToPlane(target, fit.AtStart, fit.FacePoint, fit.FaceNormal);
                 }
 
                 // Corner seat angle per corner/row (slots only, no pilot holes)
@@ -392,7 +385,8 @@ namespace WDRailing
                         seatSlotSizeIn,
                         seatSlotStandard,
                         seatSlotCutLengthIn,
-                        seatSlotSpecialFirstLayer
+                        seatSlotSpecialFirstLayer,
+                        cs.CornerClass
                     );
                 }
             }
@@ -431,22 +425,23 @@ namespace WDRailing
             Point bestFacePoint = fixedCornerPoint;
             Vector bestFaceNormal = left;
 
-            // Prefer the fixed-rail side where the adjacent rail turns to.
-            // This avoids choosing the "outside" side-face in many ambiguous corners.
+            // Prefer the fixed-rail side where the moving rail already sits.
+            // This tends to choose the true touching side-face and avoids clipping-through.
             int preferredSign = 0;
-            {
-                Vector dFix = UnitVector(new Vector(fixedDir.X, fixedDir.Y, 0.0));
-                double turn = CrossZ(dFix, new Vector(dMove.X, dMove.Y, 0.0));
-                if (Math.Abs(turn) > 1e-6)
-                    preferredSign = (turn >= 0.0) ? +1 : -1;
-            }
-
-            if (preferredSign == 0)
             {
                 Vector fromCorner = new Vector(movingPoint.X - fixedCornerPoint.X, movingPoint.Y - fixedCornerPoint.Y, 0.0);
                 double side = Dot2D(left, fromCorner);
                 if (Math.Abs(side) > 1e-6)
                     preferredSign = (side >= 0.0) ? +1 : -1;
+            }
+
+            if (preferredSign == 0)
+            {
+                // Fallback by turn direction if moving point is exactly on the corner centerline.
+                Vector dFix = UnitVector(new Vector(fixedDir.X, fixedDir.Y, 0.0));
+                double turn = CrossZ(dFix, new Vector(dMove.X, dMove.Y, 0.0));
+                if (Math.Abs(turn) > 1e-6)
+                    preferredSign = (turn >= 0.0) ? +1 : -1;
             }
 
             int[] signs = (preferredSign == 0)
@@ -504,7 +499,7 @@ namespace WDRailing
                     bestScore = score;
                     best = cand;
                     bestT = t;
-                    bestFacePoint = new Point(cand.X, cand.Y, cand.Z);
+                    bestFacePoint = new Point(q.X, q.Y, cand.Z);
                     bestFaceNormal = nFit;
                     found = true;
                 }
@@ -668,6 +663,57 @@ namespace WDRailing
             {
                 return false;
             }
+        }
+
+        private static bool TryForceBeamEndToPlane(Beam target, bool atStart, Point facePoint, Vector faceNormal)
+        {
+            try
+            {
+                if (target == null || facePoint == null || faceNormal == null) return false;
+
+                Point endPoint = atStart ? target.StartPoint : target.EndPoint;
+                Point otherPoint = atStart ? target.EndPoint : target.StartPoint;
+
+                Vector d = UnitVector(new Vector(
+                    otherPoint.X - endPoint.X,
+                    otherPoint.Y - endPoint.Y,
+                    otherPoint.Z - endPoint.Z));
+
+                Vector n = UnitVector(faceNormal);
+                double den = d.X * n.X + d.Y * n.Y + d.Z * n.Z;
+                if (Math.Abs(den) < 1e-9) return false;
+
+                double num =
+                    (facePoint.X - endPoint.X) * n.X +
+                    (facePoint.Y - endPoint.Y) * n.Y +
+                    (facePoint.Z - endPoint.Z) * n.Z;
+
+                double t = num / den;
+
+                Point moved = new Point(
+                    endPoint.X + d.X * t,
+                    endPoint.Y + d.Y * t,
+                    endPoint.Z + d.Z * t);
+
+                if (atStart) target.StartPoint = moved;
+                else target.EndPoint = moved;
+
+                return target.Modify();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string GetCornerDebugClass(bool leftTurn, bool isInside)
+        {
+            // Class codes for color-coding corner types in model view.
+            // Adjust these class numbers if your environment reserves them.
+            if (!isInside && leftTurn) return "81";  // outside-left
+            if (!isInside && !leftTurn) return "82"; // outside-right
+            if (isInside && leftTurn) return "83";   // inside-left
+            return "84";                             // inside-right
         }
 
         private static double Distance3D(Point a, Point b)

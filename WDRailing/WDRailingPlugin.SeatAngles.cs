@@ -421,7 +421,8 @@ namespace WDRailing
             double slotSizeIn,
             string slotStandard,
             double slotCutLengthIn,
-            bool slotSpecialFirstLayer)
+            bool slotSpecialFirstLayer,
+            string cornerDebugClass = null)
         {
             try
             {
@@ -470,13 +471,17 @@ namespace WDRailing
 
                 // Requested behavior:
                 //  - outside corners: 1 tube-width in X & Y away from outside corner.
-                //  - inside corners: keep 3/8" inset from inside corner.
+                //  - inside corners: 3/8" inset from inside corner.
                 //
+                // In practice the inside-corner handles were ending up ~1/4" too deep.
+                // Apply a small outward correction so the handles sit on the intended corner.
                 // For arbitrary corner angle, 1 tube-width in each leg maps to travel
                 // of tubeWidth/sin(phi/2) along the bisector.
                 double tubeWidthMm = 2.0 * halfRailDepthMm;
                 double outsideTravelMm = tubeWidthMm / s;
                 double insideInsetMm = InchesToMm(0.375);
+                double insideOutCorrectionMm = InchesToMm(0.25);
+                double effectiveInsideInsetMm = Math.Max(0.0, insideInsetMm - insideOutCorrectionMm);
 
                 Vector slotAxisDir;
                 double zSeat = railCenterZmm - halfRailDepthMm;
@@ -485,8 +490,8 @@ namespace WDRailing
                 if (isInsideCorner)
                 {
                     c = new Point(
-                        insideCorner.X - insideBis.X * insideInsetMm,
-                        insideCorner.Y - insideBis.Y * insideInsetMm,
+                        insideCorner.X - insideBis.X * effectiveInsideInsetMm,
+                        insideCorner.Y - insideBis.Y * effectiveInsideInsetMm,
                         zSeat);
 
                     slotAxisDir = new Vector(-insideBis.X, -insideBis.Y, 0.0);
@@ -510,7 +515,7 @@ namespace WDRailing
                 seat.Name = SEAT_ANGLE_NAME;
                 seat.Profile.ProfileString = SEAT_ANGLE_PROFILE;
                 seat.Material.MaterialString = SEAT_ANGLE_MATERIAL;
-                seat.Class = SEAT_ANGLE_CLASS;
+                seat.Class = string.IsNullOrWhiteSpace(cornerDebugClass) ? SEAT_ANGLE_CLASS : cornerDebugClass;
 
                 // Corner orientation is scenario-dependent.
                 // We resolve it from leg directions so the result is not fixed to one orientation.
@@ -572,30 +577,49 @@ namespace WDRailing
             bool hasNorth = north > axisTol;
             bool hasSouth = south > axisTol;
 
-            // "Horizontal" handle logic (LEFT/RIGHT)
+            // Horizontal handle:
+            // - rail to the right (east) => LEFT
+            // - rail to the left (west)  => RIGHT
             if (hasEast && !hasWest) plane = Position.PlaneEnum.LEFT;
             else if (hasWest && !hasEast) plane = Position.PlaneEnum.RIGHT;
             else
             {
-                double turnZ = prevXY.X * nextXY.Y - prevXY.Y * nextXY.X;
-                bool leftTurn = (turnZ >= 0.0);
-                plane = (leftTurn ^ isInsideCorner)
-                    ? Position.PlaneEnum.LEFT
-                    : Position.PlaneEnum.RIGHT;
+                // Fallback when near-axis ambiguity exists.
+                double sx = (legA.X + legB.X);
+                plane = (sx >= 0.0) ? Position.PlaneEnum.LEFT : Position.PlaneEnum.RIGHT;
             }
 
-            // "Vertical" handle logic (TOP/BELOW)
+            // Vertical handle:
+            // - rail to the north => BELOW ("down")
+            // - rail to the south => TOP
             if (hasNorth && !hasSouth) vertical = Position.RotationEnum.BELOW;
             else if (hasSouth && !hasNorth) vertical = Position.RotationEnum.TOP;
-            else vertical = isInsideCorner ? Position.RotationEnum.BELOW : Position.RotationEnum.TOP;
+            else
+            {
+                double sy = (legA.Y + legB.Y);
+                vertical = (sy >= 0.0) ? Position.RotationEnum.BELOW : Position.RotationEnum.TOP;
+            }
 
-            // Final facing around the vertical axis (FRONT/BEHIND)
-            // (If all corners mirror in your model, swap FRONT/BEHIND here.)
-            double turnZFace = prevXY.X * nextXY.Y - prevXY.Y * nextXY.X;
-            bool leftTurnFace = (turnZFace >= 0.0);
-            facing = (leftTurnFace ^ isInsideCorner)
-                ? Position.DepthEnum.BEHIND
-                : Position.DepthEnum.FRONT;
+            // Facing (Depth FRONT/BEHIND):
+            // Use quadrant when it is clear, then flip for inside corners.
+            bool clearX = hasEast ^ hasWest;
+            bool clearY = hasNorth ^ hasSouth;
+            if (clearX && clearY)
+            {
+                bool eastSide = hasEast;
+                bool northSide = hasNorth;
+                bool baseFront = (eastSide == northSide); // NE/SW vs NW/SE
+                if (isInsideCorner) baseFront = !baseFront;
+                facing = baseFront ? Position.DepthEnum.FRONT : Position.DepthEnum.BEHIND;
+            }
+            else
+            {
+                double turnZ = prevXY.X * nextXY.Y - prevXY.Y * nextXY.X;
+                bool leftTurn = (turnZ >= 0.0);
+                facing = (leftTurn ^ isInsideCorner)
+                    ? Position.DepthEnum.BEHIND
+                    : Position.DepthEnum.FRONT;
+            }
         }
 
 
