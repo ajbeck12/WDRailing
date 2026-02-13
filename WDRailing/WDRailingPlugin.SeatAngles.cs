@@ -142,6 +142,162 @@ namespace WDRailing
         }
 
 
+        private static Beam CreateInsideCornerSeatAngle(
+            Point cornerOnLine,
+            Vector incomingDir,
+            Vector outgoingDir,
+            Vector leftUnit,
+            double postLineLateralMm,
+            double halfPostWidthMm,
+            int railSideSign,
+            double railCenterZmm,
+            Part cornerPost,
+            double holeLineFromBendIn,
+            double slotC2CIn,
+            double slotSizeIn,
+            string slotStandard,
+            double slotCutLengthIn,
+            bool slotSpecialFirstLayer)
+        {
+            try
+            {
+                if (cornerOnLine == null) return null;
+
+                Vector inXY = GetDirXYUnit(incomingDir);
+                Vector outXY = GetDirXYUnit(outgoingDir);
+
+                // Place at same side as rail line.
+                double seatLateralMm = postLineLateralMm + railSideSign * halfPostWidthMm;
+
+                Point c = new Point(
+                    cornerOnLine.X + leftUnit.X * seatLateralMm,
+                    cornerOnLine.Y + leftUnit.Y * seatLateralMm,
+                    railCenterZmm);
+
+                // Use corner bisector and orient "sideways" across corner.
+                Vector bisector = new Vector(inXY.X + outXY.X, inXY.Y + outXY.Y, 0.0);
+                double bLen = Math.Sqrt(bisector.X * bisector.X + bisector.Y * bisector.Y);
+                if (bLen < 1e-9)
+                    bisector = new Vector(-inXY.Y, inXY.X, 0.0);
+                else
+                    bisector = new Vector(bisector.X / bLen, bisector.Y / bLen, 0.0);
+
+                Vector side = new Vector(-bisector.Y, bisector.X, 0.0);
+                double sLen = Math.Sqrt(side.X * side.X + side.Y * side.Y);
+                if (sLen < 1e-9) side = new Vector(1.0, 0.0, 0.0);
+                else side = new Vector(side.X / sLen, side.Y / sLen, 0.0);
+
+                double L = InchesToMm(1.5);
+                Point a = new Point(c.X - side.X * (L * 0.5), c.Y - side.Y * (L * 0.5), c.Z);
+                Point b = new Point(c.X + side.X * (L * 0.5), c.Y + side.Y * (L * 0.5), c.Z);
+
+                var seat = new Beam(a, b);
+                seat.Name = SEAT_ANGLE_NAME;
+                seat.Profile.ProfileString = SEAT_ANGLE_PROFILE;
+                seat.Material.MaterialString = SEAT_ANGLE_MATERIAL;
+                seat.Class = SEAT_ANGLE_CLASS;
+
+                seat.Position.Plane = Position.PlaneEnum.LEFT;
+                seat.Position.Rotation = Position.RotationEnum.BELOW;
+                seat.Position.Depth = Position.DepthEnum.BEHIND;
+
+                if (!seat.Insert()) return null;
+
+                TryAddCornerSeatSlotsOnly(
+                    seat,
+                    side,
+                    holeLineFromBendIn,
+                    slotC2CIn,
+                    slotSizeIn,
+                    slotStandard,
+                    slotCutLengthIn,
+                    slotSpecialFirstLayer);
+
+                return seat;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+
+        private static void TryAddCornerSeatSlotsOnly(
+            Beam seat,
+            Vector dirXYUnit,
+            double holeLineFromBendIn,
+            double slotC2CIn,
+            double slotSizeIn,
+            string slotStandard,
+            double slotCutLengthIn,
+            bool slotSpecialFirstLayer)
+        {
+            if (seat == null) return;
+
+            try
+            {
+                double dLen = Math.Sqrt(dirXYUnit.X * dirXYUnit.X + dirXYUnit.Y * dirXYUnit.Y + dirXYUnit.Z * dirXYUnit.Z);
+                Vector ux = (dLen > 1e-9)
+                    ? new Vector(dirXYUnit.X / dLen, dirXYUnit.Y / dLen, dirXYUnit.Z / dLen)
+                    : new Vector(1.0, 0.0, 0.0);
+
+                Point mid = new Point(
+                    (seat.StartPoint.X + seat.EndPoint.X) * 0.5,
+                    (seat.StartPoint.Y + seat.EndPoint.Y) * 0.5,
+                    (seat.StartPoint.Z + seat.EndPoint.Z) * 0.5);
+
+                Vector up = new Vector(0.0, 0.0, 1.0);
+                Vector side = new Vector(-ux.Y, ux.X, 0.0);
+                double sideLen = Math.Sqrt(side.X * side.X + side.Y * side.Y);
+                if (sideLen < 1e-9) side = new Vector(1.0, 0.0, 0.0);
+                else side = new Vector(side.X / sideLen, side.Y / sideLen, 0.0);
+
+                double downMm = InchesToMm(holeLineFromBendIn);
+                double legThicknessHalfMm = InchesToMm(0.125 * 0.5);
+
+                Point slotCenter = new Point(
+                    mid.X - up.X * downMm + side.X * legThicknessHalfMm,
+                    mid.Y - up.Y * downMm + side.Y * legThicknessHalfMm,
+                    mid.Z - up.Z * downMm + side.Z * legThicknessHalfMm);
+
+                Vector outFromPost = new Vector(-side.X, -side.Y, -side.Z);
+                Point railLegSlotCenter = new Point(
+                    mid.X + outFromPost.X * downMm - up.X * legThicknessHalfMm,
+                    mid.Y + outFromPost.Y * downMm - up.Y * legThicknessHalfMm,
+                    mid.Z + outFromPost.Z * downMm - up.Z * legThicknessHalfMm);
+
+                double orientLenMm = Math.Max(5.0, InchesToMm(0.25));
+
+                TryInsertSeatSlotHole(
+                    seat,
+                    slotCenter,
+                    ux,
+                    orientLenMm,
+                    slotStandard,
+                    slotCutLengthIn,
+                    slotSizeIn,
+                    slotC2CIn,
+                    slotSpecialFirstLayer,
+                    Position.RotationEnum.BELOW);
+
+                TryInsertSeatSlotHole(
+                    seat,
+                    railLegSlotCenter,
+                    ux,
+                    orientLenMm,
+                    slotStandard,
+                    slotCutLengthIn,
+                    slotSizeIn,
+                    slotC2CIn,
+                    slotSpecialFirstLayer,
+                    Position.RotationEnum.BACK);
+            }
+            catch
+            {
+            }
+        }
+
+
         private static void TryAddSeatPostBolting(
             Beam seat,
             Part postPart,

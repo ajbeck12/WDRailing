@@ -18,6 +18,103 @@ namespace WDRailing
 {
     public partial class WDRailingPlugin
     {
+        private struct SideRailInfo
+        {
+            public Point StartOnLine;
+            public Point EndOnLine;
+            public Vector Dir;
+            public Vector Left;
+            public double LateralOffsetMm;
+            public double HalfPostWidthMm;
+            public double FirstPostTopZ;
+            public double LastPostTopZ;
+            public Part Host;
+            public double RailStartOffsetMm;
+            public double RailEndOffsetMm;
+            public bool CapStart;
+            public bool CapEnd;
+        }
+
+        private struct CornerInfo
+        {
+            public Point CornerOnLine;
+            public Vector IncomingDir;
+            public Vector OutgoingDir;
+            public Vector Left;
+            public double LateralOffsetMm;
+            public double HalfPostWidthMm;
+            public int SideSign;
+            public double CornerTopZ;
+            public Part CornerPost;
+        }
+
+        private bool TryBuildButtCorner(
+            SideRailInfo incoming,
+            SideRailInfo outgoing,
+            out SideRailInfo updatedIncoming,
+            out SideRailInfo updatedOutgoing,
+            out CornerInfo corner)
+        {
+            updatedIncoming = incoming;
+            updatedOutgoing = outgoing;
+            corner = new CornerInfo();
+
+            if (incoming.EndOnLine == null || outgoing.StartOnLine == null)
+                return false;
+
+            if (!AreSamePoint(incoming.EndOnLine, outgoing.StartOnLine, 1.0))
+                return false;
+
+            Point cp = incoming.EndOnLine;
+
+            Vector inDir = new Vector(incoming.Dir.X, incoming.Dir.Y, 0.0);
+            Vector outDir = new Vector(outgoing.Dir.X, outgoing.Dir.Y, 0.0);
+            double inLen = Math.Sqrt(inDir.X * inDir.X + inDir.Y * inDir.Y);
+            double outLen = Math.Sqrt(outDir.X * outDir.X + outDir.Y * outDir.Y);
+            if (inLen < 1e-9 || outLen < 1e-9) return false;
+            inDir = new Vector(inDir.X / inLen, inDir.Y / inLen, 0.0);
+            outDir = new Vector(outDir.X / outLen, outDir.Y / outLen, 0.0);
+
+            // Skip near-colinear joints.
+            double cross = (inDir.X * outDir.Y) - (inDir.Y * outDir.X);
+            if (Math.Abs(cross) < 0.02) return false;
+
+            int sideSign = DetermineConnectionSideSign(incoming.Left, cp, incoming.Host);
+            if (sideSign == 0) sideSign = +1;
+
+            double halfRailWidthMm = GetHalfRailWidthMm();
+            double trimMm = halfRailWidthMm + incoming.HalfPostWidthMm;
+
+            // Butt corner: trim incoming, extend/retract outgoing to the corner node.
+            updatedIncoming.EndOnLine = new Point(
+                cp.X - inDir.X * trimMm,
+                cp.Y - inDir.Y * trimMm,
+                cp.Z);
+            updatedIncoming.RailEndOffsetMm = 0.0;
+            updatedIncoming.CapEnd = false;
+            updatedIncoming.CapStart = true;
+
+            updatedOutgoing.StartOnLine = cp;
+            updatedOutgoing.RailStartOffsetMm = 0.0;
+            updatedOutgoing.CapStart = false;
+            updatedOutgoing.CapEnd = true;
+
+            corner = new CornerInfo
+            {
+                CornerOnLine = cp,
+                IncomingDir = inDir,
+                OutgoingDir = outDir,
+                Left = incoming.Left,
+                LateralOffsetMm = incoming.LateralOffsetMm,
+                HalfPostWidthMm = incoming.HalfPostWidthMm,
+                SideSign = sideSign,
+                CornerTopZ = incoming.LastPostTopZ,
+                CornerPost = null
+            };
+
+            return true;
+        }
+
         private void CreateRails(
             Point startOnLine, Point endOnLine,
             Vector dirUnit, Vector leftUnit,
@@ -27,7 +124,8 @@ namespace WDRailing
             Part anyHostForSide,
             double railStartOffsetMm, double railEndOffsetMm,
             double railFromTopMm,
-            int railCount, double railSpacingMm)
+            int railCount, double railSpacingMm,
+            bool capStart, bool capEnd)
         {
             const string railProfile = "TS1-1/2X1-1/2X.188";
             const string railMaterial = "A53";
@@ -70,18 +168,80 @@ namespace WDRailing
                 Point a = new Point(s.X, s.Y, zStart);
                 Point b = new Point(e.X, e.Y, zEnd);
 
-                CreateRailPieces(a, b, maxLenMm, railProfile, railMaterial, railClass, railName);
+                List<Beam> pieces = CreateRailPieces(a, b, maxLenMm, railProfile, railMaterial, railClass, railName);
+                if (pieces.Count == 0) continue;
+
+                if (capStart)
+                    CreateRailEndCap(pieces[0], atStart: true);
+
+                if (capEnd)
+                    CreateRailEndCap(pieces[pieces.Count - 1], atStart: false);
+            }
+        }
+
+        private static ContourPlate CreateRailEndCap(Beam rail, bool atStart)
+        {
+            try
+            {
+                if (rail == null) return null;
+                Solid s = rail.GetSolid();
+                if (s == null) return null;
+
+                double minX = s.MinimumPoint.X;
+                double minY = s.MinimumPoint.Y;
+                double minZ = s.MinimumPoint.Z;
+                double maxX = s.MaximumPoint.X;
+                double maxY = s.MaximumPoint.Y;
+                double maxZ = s.MaximumPoint.Z;
+
+                Point end = atStart ? rail.StartPoint : rail.EndPoint;
+                Point other = atStart ? rail.EndPoint : rail.StartPoint;
+                Vector dir = new Vector(end.X - other.X, end.Y - other.Y, end.Z - other.Z);
+                double len = Math.Sqrt(dir.X * dir.X + dir.Y * dir.Y + dir.Z * dir.Z);
+                if (len < 1.0) return null;
+                dir = new Vector(dir.X / len, dir.Y / len, dir.Z / len);
+
+                double tMm = InchesToMm(0.125);
+                double cx = end.X + dir.X * (tMm * 0.5);
+                double cy = end.Y + dir.Y * (tMm * 0.5);
+                double cz = end.Z + dir.Z * (tMm * 0.5);
+
+                var cap = new ContourPlate();
+                cap.Profile.ProfileString = "PL3.175";
+                cap.Material.MaterialString = "A36";
+                cap.Class = "4";
+                cap.Name = "RAIL CAP";
+
+                cap.Position.Plane = Position.PlaneEnum.MIDDLE;
+                cap.Position.Rotation = Position.RotationEnum.TOP;
+                cap.Position.Depth = Position.DepthEnum.MIDDLE;
+
+                // Conservative rectangular cap oriented to global axes around end point.
+                double hx = Math.Max(1.0, (maxX - minX) * 0.5);
+                double hy = Math.Max(1.0, (maxY - minY) * 0.5);
+
+                cap.Contour.AddContourPoint(new ContourPoint(new Point(cx - hx, cy - hy, cz), null));
+                cap.Contour.AddContourPoint(new ContourPoint(new Point(cx + hx, cy - hy, cz), null));
+                cap.Contour.AddContourPoint(new ContourPoint(new Point(cx + hx, cy + hy, cz), null));
+                cap.Contour.AddContourPoint(new ContourPoint(new Point(cx - hx, cy + hy, cz), null));
+
+                return cap.Insert() ? cap : null;
+            }
+            catch
+            {
+                return null;
             }
         }
 
 
-        private static void CreateRailPieces(
+        private static List<Beam> CreateRailPieces(
             Point a, Point b, double maxLenMm,
             string profile, string material, string cls, string name)
         {
+            var created = new List<Beam>();
             Vector v = new Vector(b.X - a.X, b.Y - a.Y, b.Z - a.Z);
             double total = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
-            if (total < 1.0) return;
+            if (total < 1.0) return created;
 
             int pieces = Math.Max(1, (int)Math.Ceiling(total / maxLenMm));
 
@@ -103,8 +263,11 @@ namespace WDRailing
                 rail.Position.Rotation = Position.RotationEnum.TOP;
                 rail.Position.Depth = Position.DepthEnum.MIDDLE;
 
-                rail.Insert();
+                if (rail.Insert())
+                    created.Add(rail);
             }
+
+            return created;
         }
 
 
@@ -257,7 +420,9 @@ namespace WDRailing
                     railStartOffsetMm, railEndOffsetMm,
                     railFromTopMm,
                     railCount,
-                    railSpacingMm
+                    railSpacingMm,
+                    capStart: true,
+                    capEnd: true
                 );
             }
         }

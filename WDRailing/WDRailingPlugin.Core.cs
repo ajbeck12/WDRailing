@@ -359,6 +359,9 @@ namespace WDRailing
                 int inserted = 0, failed = 0, connOk = 0, connFail = 0;
                 int railSides = 0;
 
+                var sideInfos = new List<SideRailInfo>();
+                var cornerInfos = new List<CornerInfo>();
+
                 // Optional: prevents accidental duplicates if user picks extra colinear points
                 var usedPostKeys = new HashSet<string>();
 
@@ -495,21 +498,87 @@ namespace WDRailing
                         }
                     }
 
-                    // Rails for this side/segment
+                    // Rails for this side/segment (defer creation until corner resolution)
                     if (railEnabled && railCount > 0 && firstStationOnLine != null && lastStationOnLine != null)
                     {
-                        CreateRails(
-                            firstStationOnLine, lastStationOnLine,
-                            dir, left,
-                            lateralOffsetMagMm,
-                            halfPostWidthMm,
-                            firstPostTopZ, lastPostTopZ,
-                            (firstHost ?? lastHost),
-                            railStartOffsetMm, railEndOffsetMm,
-                            railFromTopMm,
-                            railCount, railSpacingMm
-                        );
+                        var info = new SideRailInfo
+                        {
+                            StartOnLine = firstStationOnLine,
+                            EndOnLine = lastStationOnLine,
+                            Dir = dir,
+                            Left = left,
+                            LateralOffsetMm = lateralOffsetMagMm,
+                            HalfPostWidthMm = halfPostWidthMm,
+                            FirstPostTopZ = firstPostTopZ,
+                            LastPostTopZ = lastPostTopZ,
+                            Host = (firstHost ?? lastHost),
+                            RailStartOffsetMm = railStartOffsetMm,
+                            RailEndOffsetMm = railEndOffsetMm,
+                            CapStart = true,
+                            CapEnd = true
+                        };
+                        sideInfos.Add(info);
                         railSides++;
+                    }
+                }
+
+                if (railEnabled && railCount > 0)
+                {
+                    if (sideInfos.Count > 1)
+                    {
+                        for (int i = 0; i < sideInfos.Count - 1; i++)
+                        {
+                            SideRailInfo current = sideInfos[i];
+                            SideRailInfo next = sideInfos[i + 1];
+
+                            if (TryBuildButtCorner(current, next, out var updatedCurrent, out var updatedNext, out var corner))
+                            {
+                                sideInfos[i] = updatedCurrent;
+                                sideInfos[i + 1] = updatedNext;
+                                cornerInfos.Add(corner);
+                            }
+                        }
+                    }
+
+                    foreach (var s in sideInfos)
+                    {
+                        CreateRails(
+                            s.StartOnLine, s.EndOnLine,
+                            s.Dir, s.Left,
+                            s.LateralOffsetMm,
+                            s.HalfPostWidthMm,
+                            s.FirstPostTopZ, s.LastPostTopZ,
+                            s.Host,
+                            s.RailStartOffsetMm, s.RailEndOffsetMm,
+                            railFromTopMm,
+                            railCount, railSpacingMm,
+                            capStart: s.CapStart,
+                            capEnd: s.CapEnd
+                        );
+                    }
+
+                    foreach (var c in cornerInfos)
+                    {
+                        for (int r = 0; r < railCount; r++)
+                        {
+                            double railZ = c.CornerTopZ - railFromTopMm - (r * railSpacingMm);
+                            CreateInsideCornerSeatAngle(
+                                c.CornerOnLine,
+                                c.IncomingDir,
+                                c.OutgoingDir,
+                                c.Left,
+                                c.LateralOffsetMm,
+                                c.HalfPostWidthMm,
+                                c.SideSign,
+                                railZ,
+                                c.CornerPost,
+                                seatHoleLineIn,
+                                seatSlotC2CIn,
+                                seatSlotSizeIn,
+                                seatSlotStandard,
+                                seatSlotCutLenIn,
+                                seatSlotSpecial1);
+                        }
                     }
                 }
 
