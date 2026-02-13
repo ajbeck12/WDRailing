@@ -305,8 +305,7 @@ namespace WDRailing
                         lateral = 1.0; // stable fallback
 
                     bool isInside = (turn * lateral) < 0.0;
-                    bool leftTurn = turn >= 0.0;
-                    string cornerClass = GetCornerDebugClass(leftTurn, isInside);
+                    string cornerClass = GetCornerDebugClassByRunDirection(prevDir, nextDir, isInside);
 
                     // Corner reference from centerline intersection.
                     Point cornerPt;
@@ -706,15 +705,56 @@ namespace WDRailing
             }
         }
 
-        private static string GetCornerDebugClass(bool leftTurn, bool isInside)
+        private enum Dir4
         {
-            // Class codes for color-coding corner types in model view.
-            // Adjust these class numbers if your environment reserves them.
-            if (!isInside && leftTurn) return "81";  // outside-left
-            if (!isInside && !leftTurn) return "82"; // outside-right
-            if (isInside && leftTurn) return "83";   // inside-left
-            return "84";                             // inside-right
+            East = 0,
+            North = 1,
+            West = 2,
+            South = 3
         }
+
+        private static Dir4 ToDir4(Vector d)
+        {
+            // dominant-axis binning from start->end vector
+            if (Math.Abs(d.X) >= Math.Abs(d.Y))
+                return (d.X >= 0.0) ? Dir4.East : Dir4.West;
+
+            return (d.Y >= 0.0) ? Dir4.North : Dir4.South;
+        }
+
+        private static int GetCornerRotationIndex(Vector prevDir, Vector nextDir)
+        {
+            // prevDir: previous rail run direction (into corner)
+            // nextDir: next rail run direction (out of corner)
+            // We key primarily from incoming run, but validate as a corner using outgoing.
+
+            Dir4 inDir = ToDir4(prevDir);
+            Dir4 outDir = ToDir4(nextDir);
+
+            // Orthogonal corner patterns (left/right both supported), grouped by rotation
+            // rot 0: incoming East
+            if (inDir == Dir4.East && (outDir == Dir4.North || outDir == Dir4.South)) return 0;
+            // rot 1: incoming North
+            if (inDir == Dir4.North && (outDir == Dir4.West || outDir == Dir4.East)) return 1;
+            // rot 2: incoming West
+            if (inDir == Dir4.West && (outDir == Dir4.South || outDir == Dir4.North)) return 2;
+            // rot 3: incoming South
+            if (inDir == Dir4.South && (outDir == Dir4.East || outDir == Dir4.West)) return 3;
+
+            // Fallback for skewed/non-orthogonal corners:
+            return (int)inDir;
+        }
+
+        private static string GetCornerDebugClassByRunDirection(Vector prevDir, Vector nextDir, bool isInside)
+        {
+            int rot = GetCornerRotationIndex(prevDir, nextDir); // 0..3
+
+            // Outside: 81..84
+            // Inside:  85..88
+            int cls = isInside ? (85 + rot) : (81 + rot);
+            return cls.ToString(CultureInfo.InvariantCulture);
+        }
+
 
         private static double Distance3D(Point a, Point b)
         {
