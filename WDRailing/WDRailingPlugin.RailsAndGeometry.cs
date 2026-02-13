@@ -829,20 +829,69 @@ namespace WDRailing
 
             try
             {
-                Solid s = host.GetSolid();
-                if (s == null) return 0;
+                double hx, hy;
 
-                double hx = 0.5 * (s.MinimumPoint.X + s.MaximumPoint.X);
-                double hy = 0.5 * (s.MinimumPoint.Y + s.MaximumPoint.Y);
+                // Prefer nearest point on host CENTERLINE in XY (beam start/end),
+                // so side detection is stable for inside openings and mixed pick direction.
+                if (TryGetClosestPointOnPartCenterlineXY(host, refPointOnLine, out Point cpt) && cpt != null)
+                {
+                    hx = cpt.X;
+                    hy = cpt.Y;
+                }
+                else
+                {
+                    Solid s = host.GetSolid();
+                    if (s == null) return 0;
+                    hx = 0.5 * (s.MinimumPoint.X + s.MaximumPoint.X);
+                    hy = 0.5 * (s.MinimumPoint.Y + s.MaximumPoint.Y);
+                }
 
                 double vx = hx - refPointOnLine.X;
                 double vy = hy - refPointOnLine.Y;
 
                 double dot = vx * leftUnit.X + vy * leftUnit.Y;
-                return (dot >= 0.0) ? +1 : -1;
+                if (Math.Abs(dot) < 1e-9) return 0;
+                return (dot > 0.0) ? +1 : -1;
             }
             catch { return 0; }
         }
+
+        private static int GetLineRefSign(string lineRef)
+        {
+            if (string.Equals(lineRef, "LEFT", StringComparison.OrdinalIgnoreCase)) return +1;
+            if (string.Equals(lineRef, "RIGHT", StringComparison.OrdinalIgnoreCase)) return -1;
+            return 0; // MIDDLE/blank
+        }
+
+        // Host-aware side resolution:
+        //  - LEFT  => place posts AWAY from host centerline side
+        //  - RIGHT => place posts TOWARD host centerline side
+        //  - MIDDLE=> zero offset unless deck-edge is given; with deck-edge, auto AWAY from host
+        // This removes dependence on clockwise/counterclockwise picking for outside vs inside openings.
+        private static int ResolvePostSideSign(
+            string lineRef,
+            Vector leftUnit,
+            Point refPointOnLine,
+            Part hostForSide,
+            bool hasDeckEdge)
+        {
+            int lineSign = GetLineRefSign(lineRef);
+            int hostSide = DetermineConnectionSideSign(leftUnit, refPointOnLine, hostForSide); // +1 host on LEFT
+
+            if (hostSide != 0)
+            {
+                if (lineSign > 0) return -hostSide;   // LEFT = away from host
+                if (lineSign < 0) return +hostSide;   // RIGHT = toward host
+
+                // MIDDLE
+                return hasDeckEdge ? -hostSide : 0;
+            }
+
+            // No host reference available: keep legacy behavior.
+            if (lineSign != 0) return lineSign;
+            return hasDeckEdge ? +1 : 0;
+        }
+
 
 
 

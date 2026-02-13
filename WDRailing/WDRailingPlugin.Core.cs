@@ -353,7 +353,8 @@ namespace WDRailing
                 if (TryGetOutsideDimMm(profile, out var outsideMm)) halfPostWidthMm = outsideMm * 0.5;
 
                 // magnitude only; direction comes from per-segment left vector
-                double lateralOffsetMagMm = ComputeLateralOffsetMm(lineRef, deckEdgeMm, halfPostWidthMm);
+                double lateralOffsetBaseMm = Math.Abs(ComputeLateralOffsetMm(lineRef, deckEdgeMm, halfPostWidthMm));
+                bool hasDeckEdge = Math.Abs(deckEdgeMm) > 0.0001;
 
                 // ===================== Process each segment (each side is independent) =====================
                 int inserted = 0, failed = 0, connOk = 0, connFail = 0;
@@ -385,6 +386,21 @@ namespace WDRailing
                     double usableLen = runLen - segStartOffsetMm - segEndOffsetMm;
                     if (usableLen <= 1.0) continue;
 
+                    // Resolve post side per segment using host CENTERLINE relative to picked line.
+                    // This makes outside-perimeter and inside-opening picks behave consistently.
+                    double dMid = segStartOffsetMm + (usableLen * 0.5);
+                    Point segMidOnLine = new Point(
+                        p1.X + dir.X * dMid,
+                        p1.Y + dir.Y * dMid,
+                        p1.Z + dir.Z * dMid);
+
+                    Part segHostForSide = null;
+                    if (hostParts.Count > 0)
+                        segHostForSide = FindBestHostPartByXY(segMidOnLine, hostParts);
+
+                    int segPostSideSign = ResolvePostSideSign(lineRef, left, segMidOnLine, segHostForSide, hasDeckEdge);
+                    double segPostLateralMm = (segPostSideSign == 0) ? 0.0 : (segPostSideSign * lateralOffsetBaseMm);
+
                     int stations = Math.Max(1, (int)Math.Ceiling(usableLen / spacingMm));
                     double actualSpacingMm = usableLen / stations;
 
@@ -406,8 +422,8 @@ namespace WDRailing
                             p1.Z + dir.Z * d);
 
                         Point station = new Point(
-                            stationOnLine.X + left.X * lateralOffsetMagMm,
-                            stationOnLine.Y + left.Y * lateralOffsetMagMm,
+                            stationOnLine.X + left.X * segPostLateralMm,
+                            stationOnLine.Y + left.Y * segPostLateralMm,
                             stationOnLine.Z);
 
                         Part nearestHost = null;
@@ -460,7 +476,7 @@ namespace WDRailing
                                     stationOnLine,
                                     dirXY,
                                     left,
-                                    lateralOffsetMagMm,
+                                    segPostLateralMm,
                                     halfPostWidthMm,
                                     seatSideSign,
                                     railZ,
@@ -509,7 +525,7 @@ namespace WDRailing
                         int railSideSign = DetermineConnectionSideSign(left, firstStationOnLine, (firstHost ?? lastHost));
                         if (railSideSign == 0) railSideSign = +1;
 
-                        double railLateralMm = lateralOffsetMagMm + railSideSign * (halfPostWidthMm + halfRailWidthMm);
+                        double railLateralMm = segPostLateralMm + railSideSign * (halfPostWidthMm + halfRailWidthMm);
 
                         railSideSpecs.Add(new RailSideSpec
                         {
@@ -517,7 +533,7 @@ namespace WDRailing
                             EndOnLine = lastStationOnLine,
                             Dir = dir,
                             Left = left,
-                            PostLineLateralMm = lateralOffsetMagMm,
+                            PostLineLateralMm = segPostLateralMm,
                             HalfPostWidthMm = halfPostWidthMm,
                             RailLateralMm = railLateralMm,
                             FirstPostTopZ = firstPostTopZ,

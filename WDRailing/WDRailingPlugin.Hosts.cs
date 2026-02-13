@@ -77,28 +77,46 @@ namespace WDRailing
 
         private static Part FindBestHostPartByXY(Point pt, List<Part> parts)
         {
+            if (pt == null || parts == null || parts.Count == 0) return null;
+
             Part best = null;
             double bestScore = double.MaxValue;
 
             foreach (Part p in parts)
             {
+                if (p == null) continue;
+
                 try
                 {
                     Solid s = p.GetSolid();
+                    if (s == null) continue;
+
                     Point min = s.MinimumPoint;
                     Point max = s.MaximumPoint;
 
+                    // Keep a mild inside-XY preference so overlapping members still win,
+                    // but primarily choose by distance to MEMBER CENTERLINE in XY.
                     bool insideXY =
                         pt.X >= min.X && pt.X <= max.X &&
                         pt.Y >= min.Y && pt.Y <= max.Y;
 
-                    double cx = (min.X + max.X) * 0.5;
-                    double cy = (min.Y + max.Y) * 0.5;
-                    double dx = pt.X - cx;
-                    double dy = pt.Y - cy;
-                    double dist = Math.Sqrt(dx * dx + dy * dy);
+                    double dist;
+                    if (TryGetClosestPointOnPartCenterlineXY(p, pt, out Point cpt))
+                    {
+                        double dx = pt.X - cpt.X;
+                        double dy = pt.Y - cpt.Y;
+                        dist = Math.Sqrt(dx * dx + dy * dy);
+                    }
+                    else
+                    {
+                        double cx = (min.X + max.X) * 0.5;
+                        double cy = (min.Y + max.Y) * 0.5;
+                        double dx = pt.X - cx;
+                        double dy = pt.Y - cy;
+                        dist = Math.Sqrt(dx * dx + dy * dy);
+                    }
 
-                    double score = insideXY ? dist - 1000000.0 : dist;
+                    double score = insideXY ? dist - 1000.0 : dist;
                     if (score < bestScore)
                     {
                         bestScore = score;
@@ -109,6 +127,38 @@ namespace WDRailing
             }
             return best;
         }
+
+        private static bool TryGetClosestPointOnPartCenterlineXY(Part part, Point refPt, out Point closest)
+        {
+            closest = null;
+            if (part == null || refPt == null) return false;
+
+            try
+            {
+                if (part is Beam b)
+                {
+                    Point a = b.StartPoint;
+                    Point z = b.EndPoint;
+                    if (a == null || z == null) return false;
+
+                    double vx = z.X - a.X;
+                    double vy = z.Y - a.Y;
+                    double vv = vx * vx + vy * vy;
+                    if (vv < 1e-9) return false;
+
+                    double t = ((refPt.X - a.X) * vx + (refPt.Y - a.Y) * vy) / vv;
+                    if (t < 0.0) t = 0.0;
+                    else if (t > 1.0) t = 1.0;
+
+                    closest = new Point(a.X + vx * t, a.Y + vy * t, refPt.Z);
+                    return true;
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
 
         // ---------------- Imperial parsing (strict) ----------------
 
