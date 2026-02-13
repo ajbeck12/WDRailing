@@ -440,49 +440,43 @@ namespace WDRailing
 
                         if (railEnabled && railCount > 0)
                         {
-                            // Corner stations are handled by dedicated corner-seat logic in corner-aware rail build.
-                            bool isCornerStation = (sideCount > 1) &&
-                                ((seg > 0 && i == 0) || (seg < sideCount - 1 && i == stations));
+                            // Regular post seat angles should be independent from corner-seat logic.
+                            // Keep creating these at every post (including posts next to corners).
+                            int seatSideSign = DetermineConnectionSideSign(left, stationOnLine, nearestHost);
+                            if (seatSideSign == 0) seatSideSign = +1;
 
-                            if (!isCornerStation)
+                            Vector dirXY = GetDirXYUnit(dir);
+
+                            for (int r = 0; r < railCount; r++)
                             {
-                                // Match the same rail-side logic used for rails
-                                int seatSideSign = DetermineConnectionSideSign(left, stationOnLine, nearestHost);
-                                if (seatSideSign == 0) seatSideSign = +1;
+                                // Rail centerline Z for this row at THIS post
+                                double railZ = postEnd.Z - railFromTopMm - (r * railSpacingMm);
 
-                                Vector dirXY = GetDirXYUnit(dir);
+                                double halfRailDepthMm = InchesToMm(1.5) * 0.5;
+                                if (TryGetOutsideDimMm("TS1-1/2X1-1/2X.188", out var railOutsideMm))
+                                    halfRailDepthMm = railOutsideMm * 0.5;
 
-                                for (int r = 0; r < railCount; r++)
-                                {
-                                    // Rail centerline Z for this row at THIS post
-                                    double railZ = postEnd.Z - railFromTopMm - (r * railSpacingMm);
-
-                                    double halfRailDepthMm = InchesToMm(1.5) * 0.5;
-                                    if (TryGetOutsideDimMm("TS1-1/2X1-1/2X.188", out var railOutsideMm))
-                                        halfRailDepthMm = railOutsideMm * 0.5;
-
-                                    CreateRailPostSeatAngle(
-                                        stationOnLine,
-                                        dirXY,
-                                        left,
-                                        lateralOffsetMagMm,
-                                        halfPostWidthMm,
-                                        seatSideSign,
-                                        railZ,
-                                        halfRailDepthMm,
-                                        postObj,
-                                        seatHoleLineIn,
-                                        seatSlotC2CIn,
-                                        seatSlotSizeIn,
-                                        seatSlotStandard,
-                                        seatSlotCutLenIn,
-                                        seatSlotSpecial1,
-                                        seatPilotC2CIn,
-                                        seatPilotDiaIn,
-                                        seatPilotStandard,
-                                        seatPilotCutLenIn
-                                    );
-                                }
+                                CreateRailPostSeatAngle(
+                                    stationOnLine,
+                                    dirXY,
+                                    left,
+                                    lateralOffsetMagMm,
+                                    halfPostWidthMm,
+                                    seatSideSign,
+                                    railZ,
+                                    halfRailDepthMm,
+                                    postObj,
+                                    seatHoleLineIn,
+                                    seatSlotC2CIn,
+                                    seatSlotSizeIn,
+                                    seatSlotStandard,
+                                    seatSlotCutLenIn,
+                                    seatSlotSpecial1,
+                                    seatPilotC2CIn,
+                                    seatPilotDiaIn,
+                                    seatPilotStandard,
+                                    seatPilotCutLenIn
+                                );
                             }
                         }
 

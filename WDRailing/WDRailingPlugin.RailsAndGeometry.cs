@@ -191,12 +191,20 @@ namespace WDRailing
                 var capEnd = new bool[n];
                 var cornerSeats = new List<CornerSeatSpec>();
 
+                // Keep unmodified row centerlines for stable corner-center math.
+                var baseStarts = new Point[n];
+                var baseEnds = new Point[n];
+                for (int i = 0; i < n; i++)
+                {
+                    baseStarts[i] = new Point(starts[i].X, starts[i].Y, starts[i].Z);
+                    baseEnds[i] = new Point(ends[i].X, ends[i].Y, ends[i].Z);
+                }
+
                 if (!isClosed)
                 {
                     capStart[0] = true;          // open polyline start
                     capEnd[n - 1] = true;        // open polyline end
                 }
-
 
                 int cornerCount = isClosed ? n : (n - 1);
                 for (int c = 0; c < cornerCount; c++)
@@ -208,45 +216,76 @@ namespace WDRailing
                     Vector prevDir = UnitVector(sides[prev].Dir);
                     Vector nextDir = UnitVector(sides[next].Dir);
 
-                    // Primary behavior:
-                    //   Keep NEXT side as the butt side, and move PREVIOUS side end (cap side)
-                    //   so it cleanly meets the butt side face (extend/retract as needed).
-                    bool movedCapSide = ComputeButtStartToSideFace(
+                    // Evaluate BOTH butt assignments and pick the one that requires the smaller move
+                    // while keeping valid rail lengths.
+                    bool optPrevCapOk = ComputeButtStartToSideFace(
                         starts[next],
                         nextDir,
                         sides[next].Left,
                         ends[prev],
                         prevDir,
                         halfRailWidthMm,
-                        out Point adjustedPrevEnd,
-                        out double tCap);
+                        out Point optPrevEnd,
+                        out double movePrevCapMm);
 
-                    if (movedCapSide)
+                    bool optNextCapOk = ComputeButtStartToSideFace(
+                        ends[prev],
+                        prevDir,
+                        sides[prev].Left,
+                        starts[next],
+                        nextDir,
+                        halfRailWidthMm,
+                        out Point optNextStart,
+                        out double moveNextCapMm);
+
+                    if (optPrevCapOk)
                     {
-                        ends[prev] = adjustedPrevEnd;
-                        capEnd[prev] = true;   // non-butt end
+                        if (Distance3D(starts[prev], optPrevEnd) < 1.0)
+                            optPrevCapOk = false;
+                    }
+
+                    if (optNextCapOk)
+                    {
+                        if (Distance3D(optNextStart, ends[next]) < 1.0)
+                            optNextCapOk = false;
+                    }
+
+                    bool choosePrevCap = false;
+                    bool chooseNextCap = false;
+
+                    if (optPrevCapOk && optNextCapOk)
+                    {
+                        choosePrevCap = Math.Abs(movePrevCapMm) <= Math.Abs(moveNextCapMm);
+                        chooseNextCap = !choosePrevCap;
+                    }
+                    else if (optPrevCapOk)
+                    {
+                        choosePrevCap = true;
+                    }
+                    else if (optNextCapOk)
+                    {
+                        chooseNextCap = true;
+                    }
+
+                    if (choosePrevCap)
+                    {
+                        // NEXT side is butt; PREV side is non-butt and gets capped at its end.
+                        ends[prev] = optPrevEnd;
+                        capEnd[prev] = true;
+                    }
+                    else if (chooseNextCap)
+                    {
+                        // PREV side is butt; NEXT side is non-butt and gets capped at its start.
+                        starts[next] = optNextStart;
+                        capStart[next] = true;
                     }
                     else
                     {
-                        // Fallback:
-                        //   Move NEXT start to previous side face.
-                        bool movedButtSide = ComputeButtStartToSideFace(
-                            ends[prev],
-                            prevDir,
-                            sides[prev].Left,
-                            starts[next],
-                            nextDir,
-                            halfRailWidthMm,
-                            out Point adjustedNextStart,
-                            out double tButt);
-
-                        if (movedButtSide)
-                            starts[next] = adjustedNextStart;
-
-                        capEnd[prev] = true;   // still cap previous side on fallback
+                        // Fallback: keep existing geometry and cap previous side end.
+                        capEnd[prev] = true;
                     }
 
-                    // Inside/outside corner classification based on turn + offset side
+                    // Inside/outside corner classification based on path turn + rail offset side.
                     double turn = CrossZ(prevDir, nextDir);
                     double lateral = 0.5 * (sides[prev].RailLateralMm + sides[next].RailLateralMm);
                     if (Math.Abs(lateral) < 1e-6)
@@ -256,10 +295,22 @@ namespace WDRailing
 
                     bool isInside = (turn * lateral) < 0.0;
 
-                    // Corner seat follows the resolved rail interface location.
-                    // Prefer butt side start if it moved in fallback, otherwise capped side end.
-                    Point cornerPt = ends[prev];
-                    double cornerZ = cornerPt.Z;
+                    // Use centerline intersection of the two corner runs as the corner reference point
+                    // for inside/outside handle inset logic.
+                    Point cornerPt;
+                    if (TryIntersectLines2D(baseEnds[prev], prevDir, baseStarts[next], nextDir, out Point xpt))
+                    {
+                        double z = 0.5 * (ends[prev].Z + starts[next].Z);
+                        cornerPt = new Point(xpt.X, xpt.Y, z);
+                    }
+                    else
+                    {
+                        // Fallback to resolved interface midpoint.
+                        cornerPt = new Point(
+                            0.5 * (ends[prev].X + starts[next].X),
+                            0.5 * (ends[prev].Y + starts[next].Y),
+                            0.5 * (ends[prev].Z + starts[next].Z));
+                    }
 
                     cornerSeats.Add(new CornerSeatSpec
                     {
@@ -267,7 +318,7 @@ namespace WDRailing
                         PrevDir = prevDir,
                         NextDir = nextDir,
                         IsInsideCorner = isInside,
-                        RailCenterZ = cornerZ,
+                        RailCenterZ = cornerPt.Z,
                         HalfRailDepthMm = halfRailWidthMm
                     });
                 }
@@ -384,6 +435,28 @@ namespace WDRailing
 
             adjustedStart = best;
             moveAlongMm = bestT;
+            return true;
+        }
+
+        private static bool TryIntersectLines2D(Point p, Vector dp, Point q, Vector dq, out Point intersection)
+        {
+            intersection = new Point(0.0, 0.0, 0.0);
+
+            Vector a = UnitVector(new Vector(dp.X, dp.Y, 0.0));
+            Vector b = UnitVector(new Vector(dq.X, dq.Y, 0.0));
+
+            double den = CrossZ(a, b);
+            if (Math.Abs(den) < 1e-9)
+                return false;
+
+            Vector qp = new Vector(q.X - p.X, q.Y - p.Y, 0.0);
+            double t = CrossZ(qp, b) / den;
+
+            intersection = new Point(
+                p.X + a.X * t,
+                p.Y + a.Y * t,
+                0.0);
+
             return true;
         }
 
