@@ -406,6 +406,7 @@ namespace WDRailing
 
 
 
+
         // ---------------- Corner seat angle (slots only, no pilot holes) ----------------
 
         private static Beam CreateCornerSeatAngleSlotsOnly(
@@ -429,39 +430,53 @@ namespace WDRailing
                 Vector prevXY = GetDirXYUnit(prevDirUnit);
                 Vector nextXY = GetDirXYUnit(nextDirUnit);
 
-                // vectors pointing OUT from the corner along each leg
+                // Vectors pointing away from the corner along each leg.
                 Vector legA = new Vector(-prevXY.X, -prevXY.Y, 0.0); // back along previous side
                 Vector legB = new Vector(nextXY.X, nextXY.Y, 0.0);   // forward along next side
 
-                Vector bis = new Vector(legA.X + legB.X, legA.Y + legB.Y, 0.0);
-                double bisLen = Math.Sqrt(bis.X * bis.X + bis.Y * bis.Y);
-                if (bisLen < 1e-9)
+                // "Inside" bisector of the two legs.
+                Vector insideBis = new Vector(legA.X + legB.X, legA.Y + legB.Y, 0.0);
+                double insideBisLen = Math.Sqrt(insideBis.X * insideBis.X + insideBis.Y * insideBis.Y);
+                if (insideBisLen < 1e-9)
                 {
-                    // near 180°: fallback normal
-                    bis = new Vector(-prevXY.Y, prevXY.X, 0.0);
-                    bisLen = Math.Sqrt(bis.X * bis.X + bis.Y * bis.Y);
+                    // Near 180° fallback.
+                    insideBis = new Vector(-prevXY.Y, prevXY.X, 0.0);
+                    insideBisLen = Math.Sqrt(insideBis.X * insideBis.X + insideBis.Y * insideBis.Y);
                 }
+                insideBis = new Vector(insideBis.X / insideBisLen, insideBis.Y / insideBisLen, 0.0);
 
-                bis = new Vector(bis.X / bisLen, bis.Y / bisLen, 0.0);
+                // Direction from centerline corner toward requested rail corner.
+                Vector cornerDir = isInsideCorner
+                    ? insideBis
+                    : new Vector(-insideBis.X, -insideBis.Y, 0.0);
 
-                // Handle offset rule:
-                //  - outside corner: 3/8" from OUTSIDE corner
-                //  - inside corner:  3/8" from INSIDE corner
+                // Distance from centerline corner to rail-surface corner:
+                // halfWidth / sin(phi/2)
+                double dot = legA.X * legB.X + legA.Y * legB.Y;
+                if (dot > 1.0) dot = 1.0;
+                else if (dot < -1.0) dot = -1.0;
+
+                double phi = Math.Acos(dot);
+                double s = Math.Sin(0.5 * phi);
+                if (s < 1e-3) s = 1e-3;
+
+                double cornerRadiusMm = halfRailDepthMm / s;
+
+                // 3/8" in from the selected inside/outside corner (toward centerline corner).
                 double handleInsetMm = InchesToMm(0.375);
-                if (!isInsideCorner)
-                    bis = new Vector(-bis.X, -bis.Y, 0.0); // outside direction
+                double handleFromCenterMm = Math.Max(0.0, cornerRadiusMm - handleInsetMm);
 
                 double zSeat = railCenterZmm - halfRailDepthMm;
 
                 Point c = new Point(
-                    cornerRailPoint.X + bis.X * handleInsetMm,
-                    cornerRailPoint.Y + bis.Y * handleInsetMm,
+                    cornerRailPoint.X + cornerDir.X * handleFromCenterMm,
+                    cornerRailPoint.Y + cornerDir.Y * handleFromCenterMm,
                     zSeat);
 
+                // Keep handles up/down so the angle stays on its side.
                 double L = GetSeatAngleLengthMm();
-
-                Point a = new Point(c.X - bis.X * (L * 0.5), c.Y - bis.Y * (L * 0.5), zSeat);
-                Point b = new Point(c.X + bis.X * (L * 0.5), c.Y + bis.Y * (L * 0.5), zSeat);
+                Point a = new Point(c.X, c.Y, c.Z - (L * 0.5));
+                Point b = new Point(c.X, c.Y, c.Z + (L * 0.5));
 
                 var seat = new Beam(a, b);
                 seat.Name = SEAT_ANGLE_NAME;
@@ -469,10 +484,10 @@ namespace WDRailing
                 seat.Material.MaterialString = SEAT_ANGLE_MATERIAL;
                 seat.Class = SEAT_ANGLE_CLASS;
 
+                // Rotate by corner handedness + inside/outside so it doesn't all face one way.
                 double turnZ = prevXY.X * nextXY.Y - prevXY.Y * nextXY.X;
                 bool leftTurn = (turnZ >= 0.0);
 
-                // Dynamic orientation so corner angle does not always face one way.
                 if (leftTurn ^ isInsideCorner)
                 {
                     seat.Position.Plane = Position.PlaneEnum.LEFT;
@@ -491,7 +506,7 @@ namespace WDRailing
 
                 TryAddCornerSlotsOnly(
                     seat,
-                    bis,
+                    cornerDir,
                     holeLineFromBendIn,
                     slotC2CIn,
                     slotSizeIn,
@@ -508,6 +523,7 @@ namespace WDRailing
         }
 
         private static void TryAddCornerSlotsOnly(
+
             Beam seat,
             Vector slotAxisDir,
             double holeLineFromBendIn,

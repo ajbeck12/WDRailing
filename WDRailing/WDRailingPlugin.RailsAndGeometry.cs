@@ -197,6 +197,7 @@ namespace WDRailing
                     capEnd[n - 1] = true;        // open polyline end
                 }
 
+
                 int cornerCount = isClosed ? n : (n - 1);
                 for (int c = 0; c < cornerCount; c++)
                 {
@@ -207,21 +208,43 @@ namespace WDRailing
                     Vector prevDir = UnitVector(sides[prev].Dir);
                     Vector nextDir = UnitVector(sides[next].Dir);
 
-                    // Adjust NEXT start so it butts to PREV side face (trim/extend).
-                    if (ComputeButtStartToSideFace(
+                    // Primary behavior:
+                    //   Keep NEXT side as the butt side, and move PREVIOUS side end (cap side)
+                    //   so it cleanly meets the butt side face (extend/retract as needed).
+                    bool movedCapSide = ComputeButtStartToSideFace(
+                        starts[next],
+                        nextDir,
+                        sides[next].Left,
+                        ends[prev],
+                        prevDir,
+                        halfRailWidthMm,
+                        out Point adjustedPrevEnd,
+                        out double tCap);
+
+                    if (movedCapSide)
+                    {
+                        ends[prev] = adjustedPrevEnd;
+                        capEnd[prev] = true;   // non-butt end
+                    }
+                    else
+                    {
+                        // Fallback:
+                        //   Move NEXT start to previous side face.
+                        bool movedButtSide = ComputeButtStartToSideFace(
                             ends[prev],
                             prevDir,
                             sides[prev].Left,
                             starts[next],
                             nextDir,
                             halfRailWidthMm,
-                            out Point adjustedNextStart))
-                    {
-                        starts[next] = adjustedNextStart;
-                    }
+                            out Point adjustedNextStart,
+                            out double tButt);
 
-                    // Non-butt end = previous side end
-                    capEnd[prev] = true;
+                        if (movedButtSide)
+                            starts[next] = adjustedNextStart;
+
+                        capEnd[prev] = true;   // still cap previous side on fallback
+                    }
 
                     // Inside/outside corner classification based on turn + offset side
                     double turn = CrossZ(prevDir, nextDir);
@@ -233,13 +256,18 @@ namespace WDRailing
 
                     bool isInside = (turn * lateral) < 0.0;
 
+                    // Corner seat follows the resolved rail interface location.
+                    // Prefer butt side start if it moved in fallback, otherwise capped side end.
+                    Point cornerPt = ends[prev];
+                    double cornerZ = cornerPt.Z;
+
                     cornerSeats.Add(new CornerSeatSpec
                     {
-                        CornerRailPoint = ends[prev],
+                        CornerRailPoint = cornerPt,
                         PrevDir = prevDir,
                         NextDir = nextDir,
                         IsInsideCorner = isInside,
-                        RailCenterZ = ends[prev].Z,
+                        RailCenterZ = cornerZ,
                         HalfRailDepthMm = halfRailWidthMm
                     });
                 }
@@ -281,7 +309,9 @@ namespace WDRailing
             }
         }
 
-        // Finds where "next" rail start should be so it butts the side face of previous rail.
+
+        // Finds where a moving rail point should be so it butts to the side face of a fixed rail.
+        // Returns adjustedStart + signed move distance along nextDir (mm).
         private static bool ComputeButtStartToSideFace(
             Point prevEnd,
             Vector prevDir,
@@ -289,9 +319,12 @@ namespace WDRailing
             Point nextStart,
             Vector nextDir,
             double halfRailWidthMm,
-            out Point adjustedStart)
+            out Point adjustedStart,
+            out double moveAlongMm)
         {
             adjustedStart = nextStart;
+            moveAlongMm = 0.0;
+
             Vector dNext = UnitVector(nextDir);
             Vector left = UnitVector(prevLeft);
 
@@ -301,14 +334,25 @@ namespace WDRailing
             bool found = false;
             double bestAbsT = double.MaxValue;
             Point best = nextStart;
+            double bestT = 0.0;
 
-            int[] signs = new[] { +1, -1 };
+            // Prefer the face the moving rail is heading toward.
+            // If ambiguous, we still test both.
+            double dotFace = Dot2D(left, dNext);
+            int preferredSign = 0;
+            if (dotFace > 1e-9) preferredSign = +1;
+            else if (dotFace < -1e-9) preferredSign = -1;
+
+            int[] signs;
+            if (preferredSign == 0) signs = new[] { +1, -1 };
+            else signs = new[] { preferredSign, -preferredSign };
+
             foreach (int sgn in signs)
             {
                 Vector n = new Vector(left.X * sgn, left.Y * sgn, 0.0);
                 n = UnitVector(n);
 
-                // plane point on side face
+                // Plane point on selected side face.
                 Point q = new Point(
                     prevEnd.X + n.X * halfRailWidthMm,
                     prevEnd.Y + n.Y * halfRailWidthMm,
@@ -330,17 +374,17 @@ namespace WDRailing
                 {
                     bestAbsT = absT;
                     best = cand;
+                    bestT = t;
                     found = true;
                 }
             }
 
-            if (found)
-            {
-                adjustedStart = best;
-                return true;
-            }
+            if (!found)
+                return false;
 
-            return false;
+            adjustedStart = best;
+            moveAlongMm = bestT;
+            return true;
         }
 
         private static ContourPlate CreateRailEndCap(Point endCenter, Vector endDir, double halfRailWidthMm)
