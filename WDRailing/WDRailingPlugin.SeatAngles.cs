@@ -444,14 +444,9 @@ namespace WDRailing
                     insideBisLen = Math.Sqrt(insideBis.X * insideBis.X + insideBis.Y * insideBis.Y);
                 }
                 insideBis = new Vector(insideBis.X / insideBisLen, insideBis.Y / insideBisLen, 0.0);
+                Vector outsideBis = new Vector(-insideBis.X, -insideBis.Y, 0.0);
 
-                // Direction from centerline corner toward requested rail corner.
-                Vector cornerDir = isInsideCorner
-                    ? insideBis
-                    : new Vector(-insideBis.X, -insideBis.Y, 0.0);
-
-                // Distance from centerline corner to rail-surface corner:
-                // halfWidth / sin(phi/2)
+                // Angle between corner legs.
                 double dot = legA.X * legB.X + legA.Y * legB.Y;
                 if (dot > 1.0) dot = 1.0;
                 else if (dot < -1.0) dot = -1.0;
@@ -460,18 +455,51 @@ namespace WDRailing
                 double s = Math.Sin(0.5 * phi);
                 if (s < 1e-3) s = 1e-3;
 
+                // Centerline-corner -> rail-corner radius.
                 double cornerRadiusMm = halfRailDepthMm / s;
 
-                // 3/8" in from the selected inside/outside corner (toward centerline corner).
-                double handleInsetMm = InchesToMm(0.375);
-                double handleFromCenterMm = Math.Max(0.0, cornerRadiusMm - handleInsetMm);
+                Point insideCorner = new Point(
+                    cornerRailPoint.X + insideBis.X * cornerRadiusMm,
+                    cornerRailPoint.Y + insideBis.Y * cornerRadiusMm,
+                    railCenterZmm);
 
+                Point outsideCorner = new Point(
+                    cornerRailPoint.X + outsideBis.X * cornerRadiusMm,
+                    cornerRailPoint.Y + outsideBis.Y * cornerRadiusMm,
+                    railCenterZmm);
+
+                // Requested behavior:
+                //  - outside corners: 1 tube-width in X & Y away from outside corner.
+                //  - inside corners: keep 3/8" inset from inside corner.
+                //
+                // For arbitrary corner angle, 1 tube-width in each leg maps to travel
+                // of tubeWidth/sin(phi/2) along the bisector.
+                double tubeWidthMm = 2.0 * halfRailDepthMm;
+                double outsideTravelMm = tubeWidthMm / s;
+                double insideInsetMm = InchesToMm(0.375);
+
+                Vector slotAxisDir;
                 double zSeat = railCenterZmm - halfRailDepthMm;
+                Point c;
 
-                Point c = new Point(
-                    cornerRailPoint.X + cornerDir.X * handleFromCenterMm,
-                    cornerRailPoint.Y + cornerDir.Y * handleFromCenterMm,
-                    zSeat);
+                if (isInsideCorner)
+                {
+                    c = new Point(
+                        insideCorner.X - insideBis.X * insideInsetMm,
+                        insideCorner.Y - insideBis.Y * insideInsetMm,
+                        zSeat);
+
+                    slotAxisDir = new Vector(-insideBis.X, -insideBis.Y, 0.0);
+                }
+                else
+                {
+                    c = new Point(
+                        outsideCorner.X + insideBis.X * outsideTravelMm,
+                        outsideCorner.Y + insideBis.Y * outsideTravelMm,
+                        zSeat);
+
+                    slotAxisDir = new Vector(insideBis.X, insideBis.Y, 0.0);
+                }
 
                 // Keep handles up/down so the angle stays on its side.
                 double L = GetSeatAngleLengthMm();
@@ -506,7 +534,7 @@ namespace WDRailing
 
                 TryAddCornerSlotsOnly(
                     seat,
-                    cornerDir,
+                    slotAxisDir,
                     holeLineFromBendIn,
                     slotC2CIn,
                     slotSizeIn,
