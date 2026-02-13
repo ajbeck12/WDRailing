@@ -23,6 +23,21 @@ namespace WDRailing
         private readonly Model _model;
         private readonly WDRailingData _data;
 
+        // Captures everything needed to build rails for one picked side after posts are solved.
+        private sealed class RailRunSegment
+        {
+            public int SegIndex;
+            public Vector Dir;
+            public Vector Left;
+            public double LateralOffsetMm;
+            public double HalfPostWidthMm;
+            public Point FirstStationOnLine;
+            public Point LastStationOnLine;
+            public double FirstPostTopZ;
+            public double LastPostTopZ;
+            public Part AnyHost;
+        }
+
         public WDRailingPlugin(WDRailingData data)
         {
             _data = data ?? new WDRailingData();
@@ -359,6 +374,8 @@ namespace WDRailing
                 int inserted = 0, failed = 0, connOk = 0, connFail = 0;
                 int railSides = 0;
 
+                var railRuns = new List<RailRunSegment>();
+
                 // Optional: prevents accidental duplicates if user picks extra colinear points
                 var usedPostKeys = new HashSet<string>();
 
@@ -495,22 +512,65 @@ namespace WDRailing
                         }
                     }
 
-                    // Rails for this side/segment
+                    // Rails are created after all segments are known so corner trimming / capping can be applied.
                     if (railEnabled && railCount > 0 && firstStationOnLine != null && lastStationOnLine != null)
                     {
-                        CreateRails(
-                            firstStationOnLine, lastStationOnLine,
-                            dir, left,
-                            lateralOffsetMagMm,
-                            halfPostWidthMm,
-                            firstPostTopZ, lastPostTopZ,
-                            (firstHost ?? lastHost),
-                            railStartOffsetMm, railEndOffsetMm,
-                            railFromTopMm,
-                            railCount, railSpacingMm
-                        );
-                        railSides++;
+                        railRuns.Add(new RailRunSegment
+                        {
+                            SegIndex = seg,
+                            Dir = dir,
+                            Left = left,
+                            LateralOffsetMm = lateralOffsetMagMm,
+                            HalfPostWidthMm = halfPostWidthMm,
+                            FirstStationOnLine = firstStationOnLine,
+                            LastStationOnLine = lastStationOnLine,
+                            FirstPostTopZ = firstPostTopZ,
+                            LastPostTopZ = lastPostTopZ,
+                            AnyHost = (firstHost ?? lastHost)
+                        });
                     }
+                }
+
+                if (railEnabled && railCount > 0 && railRuns.Count > 0)
+                {
+                    // Keep legacy behavior for a single side.
+                    if (railRuns.Count == 1)
+                    {
+                        RailRunSegment s = railRuns[0];
+                        CreateRails(
+                            s.FirstStationOnLine,
+                            s.LastStationOnLine,
+                            s.Dir,
+                            s.Left,
+                            s.LateralOffsetMm,
+                            s.HalfPostWidthMm,
+                            s.FirstPostTopZ,
+                            s.LastPostTopZ,
+                            s.AnyHost,
+                            railStartOffsetMm,
+                            railEndOffsetMm,
+                            railFromTopMm,
+                            railCount,
+                            railSpacingMm);
+                    }
+                    else
+                    {
+                        CreateCornerAwareRailsForPolyline(
+                            railRuns,
+                            railStartOffsetMm,
+                            railEndOffsetMm,
+                            railFromTopMm,
+                            railCount,
+                            railSpacingMm,
+                            seatHoleLineIn,
+                            seatSlotC2CIn,
+                            seatSlotSizeIn,
+                            seatSlotStandard,
+                            seatSlotCutLenIn,
+                            seatSlotSpecial1);
+                    }
+
+                    railSides = railRuns.Count;
                 }
 
 
