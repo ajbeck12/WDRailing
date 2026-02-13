@@ -75,364 +75,353 @@ namespace WDRailing
         }
 
 
-        /// <summary>
-        /// Builds rails for all sides of a multi-sided pick with automatic corner behavior:
-        /// - Each interior corner: next side butts into previous side (no clipping).
-        /// - Non-butt ends receive end caps.
-        /// - Adds a corner seat angle (slots only, no pilot holes) at each interior corner and rail row.
-        /// </summary>
+        // Per-side rail build data captured during post creation.
+        private sealed class RailSideSpec
+        {
+            public Point StartOnLine;
+            public Point EndOnLine;
+            public Vector Dir;
+            public Vector Left;
+            public double PostLineLateralMm;
+            public double HalfPostWidthMm;
+            public double RailLateralMm;
+            public double FirstPostTopZ;
+            public double LastPostTopZ;
+            public Part AnyHost;
+        }
+
+        private sealed class CornerSeatSpec
+        {
+            public Point CornerRailPoint;
+            public Vector PrevDir;
+            public Vector NextDir;
+            public bool IsInsideCorner;
+            public double RailCenterZ;
+            public double HalfRailDepthMm;
+        }
+
+        // Multi-side rail builder:
+        //  - avoids corner clipping by trimming/extending the butt side start to the previous side face.
+        //  - caps non-butt ends.
+        //  - inserts corner seat angle (slots only, no pilot holes) per row/per corner.
         private void CreateCornerAwareRailsForPolyline(
-            List<RailRunSegment> segments,
+            List<RailSideSpec> sides,
+            bool isClosed,
             double railStartOffsetMm,
             double railEndOffsetMm,
             double railFromTopMm,
             int railCount,
             double railSpacingMm,
-            double seatHoleLineFromBendIn,
+            double seatHoleLineIn,
             double seatSlotC2CIn,
             double seatSlotSizeIn,
             string seatSlotStandard,
             double seatSlotCutLengthIn,
             bool seatSlotSpecialFirstLayer)
         {
-            if (segments == null || segments.Count == 0 || railCount <= 0) return;
+            if (sides == null || sides.Count == 0 || railCount <= 0) return;
 
             const string railProfile = "TS1-1/2X1-1/2X.188";
             const string railMaterial = "A53";
             const string railClass = "1";
             const string railName = "RAIL";
-
             double maxLenMm = InchesToMm(240.0); // 20'-0"
 
-            double railOutsideMm = InchesToMm(1.5);
-            if (TryGetOutsideDimMm(railProfile, out var railOutsideMmParsed))
-                railOutsideMm = railOutsideMmParsed;
-            double halfRailWidthMm = railOutsideMm * 0.5;
+            double halfRailWidthMm = InchesToMm(1.5) * 0.5;
+            if (TryGetOutsideDimMm(railProfile, out var railOutsideMm))
+                halfRailWidthMm = railOutsideMm * 0.5;
 
-            int sideCount = segments.Count;
-
-            var startPts = new Point[sideCount, railCount];
-            var endPts = new Point[sideCount, railCount];
-
-            // Build base centerlines per side/row before corner trimming.
-            for (int s = 0; s < sideCount; s++)
+            int n = sides.Count;
+            if (n == 1)
             {
-                RailRunSegment seg = segments[s];
-
-                int sideSign = DetermineConnectionSideSign(seg.Left, seg.FirstStationOnLine, seg.AnyHost);
-                if (sideSign == 0) sideSign = +1;
-
-                double railLateralMm = seg.LateralOffsetMm + sideSign * (seg.HalfPostWidthMm + halfRailWidthMm);
-
-                Point sLine = new Point(
-                    seg.FirstStationOnLine.X - seg.Dir.X * railStartOffsetMm,
-                    seg.FirstStationOnLine.Y - seg.Dir.Y * railStartOffsetMm,
-                    seg.FirstStationOnLine.Z - seg.Dir.Z * railStartOffsetMm);
-
-                Point eLine = new Point(
-                    seg.LastStationOnLine.X + seg.Dir.X * railEndOffsetMm,
-                    seg.LastStationOnLine.Y + seg.Dir.Y * railEndOffsetMm,
-                    seg.LastStationOnLine.Z + seg.Dir.Z * railEndOffsetMm);
-
-                Point sBase = new Point(
-                    sLine.X + seg.Left.X * railLateralMm,
-                    sLine.Y + seg.Left.Y * railLateralMm,
-                    sLine.Z);
-
-                Point eBase = new Point(
-                    eLine.X + seg.Left.X * railLateralMm,
-                    eLine.Y + seg.Left.Y * railLateralMm,
-                    eLine.Z);
-
-                for (int r = 0; r < railCount; r++)
-                {
-                    double zStart = seg.FirstPostTopZ - railFromTopMm - (r * railSpacingMm);
-                    double zEnd = seg.LastPostTopZ - railFromTopMm - (r * railSpacingMm);
-
-                    startPts[s, r] = new Point(sBase.X, sBase.Y, zStart);
-                    endPts[s, r] = new Point(eBase.X, eBase.Y, zEnd);
-                }
+                var only = sides[0];
+                CreateRails(
+                    only.StartOnLine, only.EndOnLine,
+                    only.Dir, only.Left,
+                    only.PostLineLateralMm,
+                    only.HalfPostWidthMm,
+                    only.FirstPostTopZ, only.LastPostTopZ,
+                    only.AnyHost,
+                    railStartOffsetMm, railEndOffsetMm,
+                    railFromTopMm,
+                    railCount, railSpacingMm);
+                return;
             }
 
-            // Cap plan: non-butt ends only.
-            // Convention: at every interior corner, next side butts into previous side.
-            var capAtStart = new bool[sideCount, railCount];
-            var capAtEnd = new bool[sideCount, railCount];
-
-            // Open start/end are always non-butt.
             for (int r = 0; r < railCount; r++)
             {
-                capAtStart[0, r] = true;
-                capAtEnd[sideCount - 1, r] = true;
-            }
+                var starts = new Point[n];
+                var ends = new Point[n];
+                var dirs = new Vector[n];
 
-            // Corner seat records
-            var cornerSeats = new List<CornerSeatSpec>();
-
-            for (int c = 0; c < sideCount - 1; c++)
-            {
-                int a = c;
-                int b = c + 1;
-
-                for (int r = 0; r < railCount; r++)
+                for (int i = 0; i < n; i++)
                 {
-                    Point aStart = startPts[a, r];
-                    Point aEnd = endPts[a, r];
-                    Point bStart = startPts[b, r];
-                    Point bEnd = endPts[b, r];
+                    RailSideSpec s = sides[i];
 
-                    Vector dirA = UnitVector(aStart, aEnd);
-                    Vector dirB = UnitVector(bStart, bEnd);
+                    Point sLine = new Point(
+                        s.StartOnLine.X - s.Dir.X * railStartOffsetMm,
+                        s.StartOnLine.Y - s.Dir.Y * railStartOffsetMm,
+                        s.StartOnLine.Z - s.Dir.Z * railStartOffsetMm);
 
-                    // If nearly colinear, no corner treatment here.
-                    double turn = Math.Abs(dirA.X * dirB.X + dirA.Y * dirB.Y + dirA.Z * dirB.Z);
-                    if (turn > 0.999)
-                        continue;
+                    Point eLine = new Point(
+                        s.EndOnLine.X + s.Dir.X * railEndOffsetMm,
+                        s.EndOnLine.Y + s.Dir.Y * railEndOffsetMm,
+                        s.EndOnLine.Z + s.Dir.Z * railEndOffsetMm);
 
-                    // Butt side B into side A and trim/extend B start so it lands on A's outer face plane.
-                    Point newBStart = ComputeButtStartToSideFace(aEnd, dirA, bStart, dirB, halfRailWidthMm);
-                    startPts[b, r] = newBStart;
+                    double zStart = s.FirstPostTopZ - railFromTopMm - (r * railSpacingMm);
+                    double zEnd = s.LastPostTopZ - railFromTopMm - (r * railSpacingMm);
 
-                    // Non-butt end at this corner is side A end -> cap it.
-                    capAtEnd[a, r] = true;
+                    starts[i] = new Point(
+                        sLine.X + s.Left.X * s.RailLateralMm,
+                        sLine.Y + s.Left.Y * s.RailLateralMm,
+                        zStart);
 
-                    // Add corner seat at interior corner (slots only).
+                    ends[i] = new Point(
+                        eLine.X + s.Left.X * s.RailLateralMm,
+                        eLine.Y + s.Left.Y * s.RailLateralMm,
+                        zEnd);
+
+                    dirs[i] = UnitVector(new Vector(
+                        ends[i].X - starts[i].X,
+                        ends[i].Y - starts[i].Y,
+                        ends[i].Z - starts[i].Z));
+                }
+
+                var capStart = new bool[n];
+                var capEnd = new bool[n];
+                var cornerSeats = new List<CornerSeatSpec>();
+
+                if (!isClosed)
+                {
+                    capStart[0] = true;          // open polyline start
+                    capEnd[n - 1] = true;        // open polyline end
+                }
+
+                int cornerCount = isClosed ? n : (n - 1);
+                for (int c = 0; c < cornerCount; c++)
+                {
+                    int prev = c;
+                    int next = (c + 1) % n;
+
+                    // Direction at corner
+                    Vector prevDir = UnitVector(sides[prev].Dir);
+                    Vector nextDir = UnitVector(sides[next].Dir);
+
+                    // Adjust NEXT start so it butts to PREV side face (trim/extend).
+                    if (ComputeButtStartToSideFace(
+                            ends[prev],
+                            prevDir,
+                            sides[prev].Left,
+                            starts[next],
+                            nextDir,
+                            halfRailWidthMm,
+                            out Point adjustedNextStart))
+                    {
+                        starts[next] = adjustedNextStart;
+                    }
+
+                    // Non-butt end = previous side end
+                    capEnd[prev] = true;
+
+                    // Inside/outside corner classification based on turn + offset side
+                    double turn = CrossZ(prevDir, nextDir);
+                    double lateral = 0.5 * (sides[prev].RailLateralMm + sides[next].RailLateralMm);
+                    if (Math.Abs(lateral) < 1e-6)
+                        lateral = sides[prev].RailLateralMm;
+                    if (Math.Abs(lateral) < 1e-6)
+                        lateral = 1.0; // stable fallback
+
+                    bool isInside = (turn * lateral) < 0.0;
+
                     cornerSeats.Add(new CornerSeatSpec
                     {
-                        ContactAEnd = aEnd,
-                        ButtBStart = newBStart,
-                        DirA = dirA,
-                        DirB = dirB
+                        CornerRailPoint = ends[prev],
+                        PrevDir = prevDir,
+                        NextDir = nextDir,
+                        IsInsideCorner = isInside,
+                        RailCenterZ = ends[prev].Z,
+                        HalfRailDepthMm = halfRailWidthMm
                     });
                 }
-            }
 
-            // Build rails and keep first/last piece handle so we can cap start/end pieces.
-            var firstPiece = new Beam[sideCount, railCount];
-            var lastPiece = new Beam[sideCount, railCount];
-
-            for (int s = 0; s < sideCount; s++)
-            {
-                for (int r = 0; r < railCount; r++)
+                // Build rails + caps
+                for (int i = 0; i < n; i++)
                 {
-                    Point a = startPts[s, r];
-                    Point b = endPts[s, r];
+                    if (Distance3D(starts[i], ends[i]) < 1.0) continue;
 
-                    if (Distance3D(a, b) < 1.0) continue;
+                    CreateRailPieces(starts[i], ends[i], maxLenMm, railProfile, railMaterial, railClass, railName);
 
-                    List<Beam> pieces = CreateRailPiecesCollect(a, b, maxLenMm, railProfile, railMaterial, railClass, railName);
-                    if (pieces.Count == 0) continue;
+                    Vector d = UnitVector(new Vector(
+                        ends[i].X - starts[i].X,
+                        ends[i].Y - starts[i].Y,
+                        ends[i].Z - starts[i].Z));
 
-                    firstPiece[s, r] = pieces[0];
-                    lastPiece[s, r] = pieces[pieces.Count - 1];
+                    if (capStart[i]) CreateRailEndCap(starts[i], new Vector(-d.X, -d.Y, -d.Z), halfRailWidthMm);
+                    if (capEnd[i]) CreateRailEndCap(ends[i], d, halfRailWidthMm);
                 }
-            }
 
-            // Apply non-butt end caps.
-            for (int s = 0; s < sideCount; s++)
-            {
-                for (int r = 0; r < railCount; r++)
+                // Corner seat angle per corner/row (slots only, no pilot holes)
+                foreach (var cs in cornerSeats)
                 {
-                    Beam f = firstPiece[s, r];
-                    Beam l = lastPiece[s, r];
-
-                    if (capAtStart[s, r] && f != null)
-                        CreateRailEndCap(f, atStart: true, outsideMm: railOutsideMm);
-
-                    if (capAtEnd[s, r] && l != null)
-                        CreateRailEndCap(l, atStart: false, outsideMm: railOutsideMm);
+                    CreateCornerSeatAngleSlotsOnly(
+                        cs.CornerRailPoint,
+                        cs.PrevDir,
+                        cs.NextDir,
+                        cs.IsInsideCorner,
+                        cs.RailCenterZ,
+                        cs.HalfRailDepthMm,
+                        seatHoleLineIn,
+                        seatSlotC2CIn,
+                        seatSlotSizeIn,
+                        seatSlotStandard,
+                        seatSlotCutLengthIn,
+                        seatSlotSpecialFirstLayer
+                    );
                 }
-            }
-
-            // Add interior corner seat angles (slots only, no pilot holes).
-            for (int i = 0; i < cornerSeats.Count; i++)
-            {
-                CornerSeatSpec cs = cornerSeats[i];
-                CreateCornerSeatAngleSlotsOnly(
-                    cs.ContactAEnd,
-                    cs.ButtBStart,
-                    cs.DirA,
-                    cs.DirB,
-                    seatHoleLineFromBendIn,
-                    seatSlotC2CIn,
-                    seatSlotSizeIn,
-                    seatSlotStandard,
-                    seatSlotCutLengthIn,
-                    seatSlotSpecialFirstLayer);
             }
         }
 
-
-        private sealed class CornerSeatSpec
+        // Finds where "next" rail start should be so it butts the side face of previous rail.
+        private static bool ComputeButtStartToSideFace(
+            Point prevEnd,
+            Vector prevDir,
+            Vector prevLeft,
+            Point nextStart,
+            Vector nextDir,
+            double halfRailWidthMm,
+            out Point adjustedStart)
         {
-            public Point ContactAEnd;
-            public Point ButtBStart;
-            public Vector DirA;
-            public Vector DirB;
+            adjustedStart = nextStart;
+            Vector dNext = UnitVector(nextDir);
+            Vector left = UnitVector(prevLeft);
+
+            if (LengthXY(dNext) < 1e-9 || LengthXY(left) < 1e-9)
+                return false;
+
+            bool found = false;
+            double bestAbsT = double.MaxValue;
+            Point best = nextStart;
+
+            int[] signs = new[] { +1, -1 };
+            foreach (int sgn in signs)
+            {
+                Vector n = new Vector(left.X * sgn, left.Y * sgn, 0.0);
+                n = UnitVector(n);
+
+                // plane point on side face
+                Point q = new Point(
+                    prevEnd.X + n.X * halfRailWidthMm,
+                    prevEnd.Y + n.Y * halfRailWidthMm,
+                    prevEnd.Z);
+
+                double denom = Dot2D(n, dNext);
+                if (Math.Abs(denom) < 1e-9) continue;
+
+                double num = (q.X - nextStart.X) * n.X + (q.Y - nextStart.Y) * n.Y;
+                double t = num / denom;
+
+                Point cand = new Point(
+                    nextStart.X + dNext.X * t,
+                    nextStart.Y + dNext.Y * t,
+                    nextStart.Z + dNext.Z * t);
+
+                double absT = Math.Abs(t);
+                if (absT < bestAbsT)
+                {
+                    bestAbsT = absT;
+                    best = cand;
+                    found = true;
+                }
+            }
+
+            if (found)
+            {
+                adjustedStart = best;
+                return true;
+            }
+
+            return false;
         }
 
-
-        private static Point ComputeButtStartToSideFace(
-            Point aEnd,
-            Vector dirA,
-            Point bStart,
-            Vector dirB,
-            double halfRailWidthMm)
+        private static ContourPlate CreateRailEndCap(Point endCenter, Vector endDir, double halfRailWidthMm)
         {
-            // Direction from A centerline toward B side near the corner.
-            Vector toB = new Vector(bStart.X - aEnd.X, bStart.Y - aEnd.Y, bStart.Z - aEnd.Z);
-
-            double dotAB = toB.X * dirA.X + toB.Y * dirA.Y + toB.Z * dirA.Z;
-            Vector n = new Vector(
-                toB.X - dotAB * dirA.X,
-                toB.Y - dotAB * dirA.Y,
-                toB.Z - dotAB * dirA.Z);
-
-            double nLen = Math.Sqrt(n.X * n.X + n.Y * n.Y + n.Z * n.Z);
-            if (nLen < 1e-6)
+            try
             {
-                // Fallback normal if geometry is very tight/noisy.
+                if (endCenter == null) return null;
+                Vector d = UnitVector(endDir);
+                if (LengthXY(d) < 1e-9) d = new Vector(1.0, 0.0, 0.0);
+
+                Vector side = GetLeftVectorXY(d);
                 Vector up = new Vector(0.0, 0.0, 1.0);
-                n = Cross(up, dirA);
-                nLen = Math.Sqrt(n.X * n.X + n.Y * n.Y + n.Z * n.Z);
-                if (nLen < 1e-6)
-                    n = new Vector(1.0, 0.0, 0.0);
-                else
-                    n = new Vector(n.X / nLen, n.Y / nLen, n.Z / nLen);
+
+                // 1/8" cap plate
+                double tMm = InchesToMm(0.125);
+                Point c = new Point(
+                    endCenter.X + d.X * (tMm * 0.5),
+                    endCenter.Y + d.Y * (tMm * 0.5),
+                    endCenter.Z + d.Z * (tMm * 0.5));
+
+                Point p1 = new Point(c.X + side.X * halfRailWidthMm + up.X * halfRailWidthMm, c.Y + side.Y * halfRailWidthMm + up.Y * halfRailWidthMm, c.Z + side.Z * halfRailWidthMm + up.Z * halfRailWidthMm);
+                Point p2 = new Point(c.X - side.X * halfRailWidthMm + up.X * halfRailWidthMm, c.Y - side.Y * halfRailWidthMm + up.Y * halfRailWidthMm, c.Z - side.Z * halfRailWidthMm + up.Z * halfRailWidthMm);
+                Point p3 = new Point(c.X - side.X * halfRailWidthMm - up.X * halfRailWidthMm, c.Y - side.Y * halfRailWidthMm - up.Y * halfRailWidthMm, c.Z - side.Z * halfRailWidthMm - up.Z * halfRailWidthMm);
+                Point p4 = new Point(c.X + side.X * halfRailWidthMm - up.X * halfRailWidthMm, c.Y + side.Y * halfRailWidthMm - up.Y * halfRailWidthMm, c.Z + side.Z * halfRailWidthMm - up.Z * halfRailWidthMm);
+
+                var cap = new ContourPlate();
+                cap.Profile.ProfileString = "PL3.175";
+                cap.Material.MaterialString = "A36";
+                cap.Class = "4";
+                cap.Name = "RAIL CAP";
+
+                cap.Position.Plane = Position.PlaneEnum.MIDDLE;
+                cap.Position.Rotation = Position.RotationEnum.TOP;
+                cap.Position.Depth = Position.DepthEnum.MIDDLE;
+
+                cap.Contour.AddContourPoint(new ContourPoint(p1, null));
+                cap.Contour.AddContourPoint(new ContourPoint(p2, null));
+                cap.Contour.AddContourPoint(new ContourPoint(p3, null));
+                cap.Contour.AddContourPoint(new ContourPoint(p4, null));
+
+                if (cap.Insert()) return cap;
             }
-            else
+            catch
             {
-                n = new Vector(n.X / nLen, n.Y / nLen, n.Z / nLen);
+                // cap is best-effort
             }
 
-            Point planePoint = new Point(
-                aEnd.X + n.X * halfRailWidthMm,
-                aEnd.Y + n.Y * halfRailWidthMm,
-                aEnd.Z + n.Z * halfRailWidthMm);
-
-            Vector bp = new Vector(
-                planePoint.X - bStart.X,
-                planePoint.Y - bStart.Y,
-                planePoint.Z - bStart.Z);
-
-            double denom = dirB.X * n.X + dirB.Y * n.Y + dirB.Z * n.Z;
-
-            double t;
-            if (Math.Abs(denom) < 1e-6)
-            {
-                t = halfRailWidthMm;
-            }
-            else
-            {
-                t = (bp.X * n.X + bp.Y * n.Y + bp.Z * n.Z) / denom;
-            }
-
-            // Clamp to avoid pathological long jumps on odd geometry.
-            double maxShift = halfRailWidthMm * 4.0;
-            if (t > maxShift) t = maxShift;
-            if (t < -maxShift) t = -maxShift;
-
-            return new Point(
-                bStart.X + dirB.X * t,
-                bStart.Y + dirB.Y * t,
-                bStart.Z + dirB.Z * t);
+            return null;
         }
-
-
-        private static Vector UnitVector(Point a, Point b)
-        {
-            Vector v = new Vector(b.X - a.X, b.Y - a.Y, b.Z - a.Z);
-            double len = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
-            if (len < 1e-9) return new Vector(1.0, 0.0, 0.0);
-            return new Vector(v.X / len, v.Y / len, v.Z / len);
-        }
-
 
         private static double Distance3D(Point a, Point b)
         {
+            if (a == null || b == null) return 0.0;
             double dx = a.X - b.X;
             double dy = a.Y - b.Y;
             double dz = a.Z - b.Z;
             return Math.Sqrt(dx * dx + dy * dy + dz * dz);
         }
 
-
-        private static Vector Cross(Vector a, Vector b)
+        private static Vector UnitVector(Vector v)
         {
-            return new Vector(
-                a.Y * b.Z - a.Z * b.Y,
-                a.Z * b.X - a.X * b.Z,
-                a.X * b.Y - a.Y * b.X);
+            if (v == null) return new Vector(1.0, 0.0, 0.0);
+            double len = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+            if (len < 1e-12) return new Vector(1.0, 0.0, 0.0);
+            return new Vector(v.X / len, v.Y / len, v.Z / len);
         }
 
-
-        private static ContourPlate CreateRailEndCap(Beam rail, bool atStart, double outsideMm)
+        private static double LengthXY(Vector v)
         {
-            try
-            {
-                if (rail == null) return null;
+            if (v == null) return 0.0;
+            return Math.Sqrt(v.X * v.X + v.Y * v.Y);
+        }
 
-                if (outsideMm < 0.1) outsideMm = InchesToMm(1.5);
-                double half = outsideMm * 0.5;
+        private static double Dot2D(Vector a, Vector b)
+        {
+            return a.X * b.X + a.Y * b.Y;
+        }
 
-                double tMm = InchesToMm(0.125); // 1/8"
-
-                Point p0 = rail.StartPoint;
-                Point p1 = rail.EndPoint;
-
-                Vector u = UnitVector(p0, p1);
-                if (atStart) u = new Vector(-u.X, -u.Y, -u.Z);
-
-                Vector refV = (Math.Abs(u.Z) < 0.95)
-                    ? new Vector(0.0, 0.0, 1.0)
-                    : new Vector(1.0, 0.0, 0.0);
-
-                Vector v = Cross(refV, u);
-                double vLen = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
-                if (vLen < 1e-9) return null;
-                v = new Vector(v.X / vLen, v.Y / vLen, v.Z / vLen);
-
-                Vector w = Cross(u, v);
-                double wLen = Math.Sqrt(w.X * w.X + w.Y * w.Y + w.Z * w.Z);
-                if (wLen < 1e-9) return null;
-                w = new Vector(w.X / wLen, w.Y / wLen, w.Z / wLen);
-
-                Point end = atStart ? rail.StartPoint : rail.EndPoint;
-
-                // Push slightly outward so cap sits on the exposed end face.
-                Point c = new Point(
-                    end.X + u.X * (tMm * 0.5),
-                    end.Y + u.Y * (tMm * 0.5),
-                    end.Z + u.Z * (tMm * 0.5));
-
-                Point q1 = new Point(c.X + v.X * half + w.X * half, c.Y + v.Y * half + w.Y * half, c.Z + v.Z * half + w.Z * half);
-                Point q2 = new Point(c.X - v.X * half + w.X * half, c.Y - v.Y * half + w.Y * half, c.Z - v.Z * half + w.Z * half);
-                Point q3 = new Point(c.X - v.X * half - w.X * half, c.Y - v.Y * half - w.Y * half, c.Z - v.Z * half - w.Z * half);
-                Point q4 = new Point(c.X + v.X * half - w.X * half, c.Y + v.Y * half - w.Y * half, c.Z + v.Z * half - w.Z * half);
-
-                var cap = new ContourPlate();
-                cap.Name = "RAIL CAP";
-                cap.Class = "4";
-                cap.Material.MaterialString = "A36";
-                cap.Profile.ProfileString = "PL3.175";
-
-                cap.Position.Plane = Position.PlaneEnum.MIDDLE;
-                cap.Position.Rotation = Position.RotationEnum.TOP;
-                cap.Position.Depth = Position.DepthEnum.MIDDLE;
-
-                cap.Contour.AddContourPoint(new ContourPoint(q1, null));
-                cap.Contour.AddContourPoint(new ContourPoint(q2, null));
-                cap.Contour.AddContourPoint(new ContourPoint(q3, null));
-                cap.Contour.AddContourPoint(new ContourPoint(q4, null));
-
-                if (cap.Insert()) return cap;
-            }
-            catch
-            {
-                // Best effort only.
-            }
-
-            return null;
+        private static double CrossZ(Vector a, Vector b)
+        {
+            return a.X * b.Y - a.Y * b.X;
         }
 
 
@@ -466,44 +455,6 @@ namespace WDRailing
 
                 rail.Insert();
             }
-        }
-
-
-        private static List<Beam> CreateRailPiecesCollect(
-            Point a, Point b, double maxLenMm,
-            string profile, string material, string cls, string name)
-        {
-            var created = new List<Beam>();
-
-            Vector v = new Vector(b.X - a.X, b.Y - a.Y, b.Z - a.Z);
-            double total = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
-            if (total < 1.0) return created;
-
-            int pieces = Math.Max(1, (int)Math.Ceiling(total / maxLenMm));
-
-            for (int i = 0; i < pieces; i++)
-            {
-                double t0 = (double)i / pieces;
-                double t1 = (double)(i + 1) / pieces;
-
-                Point p0 = new Point(a.X + v.X * t0, a.Y + v.Y * t0, a.Z + v.Z * t0);
-                Point p1 = new Point(a.X + v.X * t1, a.Y + v.Y * t1, a.Z + v.Z * t1);
-
-                var rail = new Beam(p0, p1);
-                rail.Name = name;
-                rail.Class = cls;
-                rail.Profile.ProfileString = profile;
-                rail.Material.MaterialString = material;
-
-                rail.Position.Plane = Position.PlaneEnum.MIDDLE;
-                rail.Position.Rotation = Position.RotationEnum.TOP;
-                rail.Position.Depth = Position.DepthEnum.MIDDLE;
-
-                if (rail.Insert())
-                    created.Add(rail);
-            }
-
-            return created;
         }
 
 
