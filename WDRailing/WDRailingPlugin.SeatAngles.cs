@@ -142,6 +142,150 @@ namespace WDRailing
         }
 
 
+        /// <summary>
+        /// Corner seat angle used between two rail sides.
+        /// Slots are added on both legs; no pilot holes are created.
+        /// </summary>
+        private static Beam CreateCornerSeatAngleSlotsOnly(
+            Point contactAEnd,
+            Point buttBStart,
+            Vector dirA,
+            Vector dirB,
+            double holeLineFromBendIn,
+            double slotC2CIn,
+            double slotSizeIn,
+            string slotStandard,
+            double slotCutLengthIn,
+            bool slotSpecialFirstLayer)
+        {
+            try
+            {
+                if (contactAEnd == null || buttBStart == null) return null;
+
+                Vector uxA = GetDirXYUnit(dirA);
+                Vector uxB = GetDirXYUnit(dirB);
+
+                // Center close to the corner contact.
+                Point c = new Point(
+                    (contactAEnd.X + buttBStart.X) * 0.5,
+                    (contactAEnd.Y + buttBStart.Y) * 0.5,
+                    (contactAEnd.Z + buttBStart.Z) * 0.5);
+
+                // "Sideways" orientation: vertical short piece so both legs can bear on rail side faces.
+                double L = InchesToMm(1.5);
+                Point a = new Point(c.X, c.Y, c.Z - (L * 0.5));
+                Point b = new Point(c.X, c.Y, c.Z + (L * 0.5));
+
+                var seat = new Beam(a, b);
+                seat.Name = SEAT_ANGLE_NAME;
+                seat.Profile.ProfileString = SEAT_ANGLE_PROFILE;
+                seat.Material.MaterialString = SEAT_ANGLE_MATERIAL;
+                seat.Class = SEAT_ANGLE_CLASS;
+
+                seat.Position.Plane = Position.PlaneEnum.MIDDLE;
+                seat.Position.Rotation = Position.RotationEnum.TOP;
+                seat.Position.Depth = Position.DepthEnum.MIDDLE;
+
+                if (!seat.Insert())
+                    return null;
+
+                TryAddCornerSlotsOnly(
+                    seat,
+                    uxA,
+                    uxB,
+                    holeLineFromBendIn,
+                    slotC2CIn,
+                    slotSizeIn,
+                    slotStandard,
+                    slotCutLengthIn,
+                    slotSpecialFirstLayer);
+
+                return seat;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+
+        private static void TryAddCornerSlotsOnly(
+            Beam seat,
+            Vector dirA,
+            Vector dirB,
+            double holeLineFromBendIn,
+            double slotC2CIn,
+            double slotSizeIn,
+            string slotStandard,
+            double slotCutLengthIn,
+            bool slotSpecialFirstLayer)
+        {
+            if (seat == null) return;
+
+            try
+            {
+                Point mid = new Point(
+                    (seat.StartPoint.X + seat.EndPoint.X) * 0.5,
+                    (seat.StartPoint.Y + seat.EndPoint.Y) * 0.5,
+                    (seat.StartPoint.Z + seat.EndPoint.Z) * 0.5);
+
+                double insetMm = InchesToMm(holeLineFromBendIn);
+                double orientLenMm = Math.Max(5.0, InchesToMm(0.25));
+
+                Vector uxA = Normalize(dirA);
+                Vector uxB = Normalize(dirB);
+
+                Point slotA = new Point(
+                    mid.X + uxA.X * insetMm,
+                    mid.Y + uxA.Y * insetMm,
+                    mid.Z + uxA.Z * insetMm);
+
+                Point slotB = new Point(
+                    mid.X + uxB.X * insetMm,
+                    mid.Y + uxB.Y * insetMm,
+                    mid.Z + uxB.Z * insetMm);
+
+                // One slot for each leg direction. No pilot holes.
+                TryInsertSeatSlotHole(
+                    seat,
+                    slotA,
+                    uxA,
+                    orientLenMm,
+                    slotStandard,
+                    slotCutLengthIn,
+                    slotSizeIn,
+                    slotC2CIn,
+                    slotSpecialFirstLayer,
+                    Position.RotationEnum.BELOW);
+
+                TryInsertSeatSlotHole(
+                    seat,
+                    slotB,
+                    uxB,
+                    orientLenMm,
+                    slotStandard,
+                    slotCutLengthIn,
+                    slotSizeIn,
+                    slotC2CIn,
+                    slotSpecialFirstLayer,
+                    Position.RotationEnum.TOP);
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+
+
+        private static Vector Normalize(Vector v)
+        {
+            if (v == null) return new Vector(1.0, 0.0, 0.0);
+            double len = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+            if (len < 1e-9) return new Vector(1.0, 0.0, 0.0);
+            return new Vector(v.X / len, v.Y / len, v.Z / len);
+        }
+
+
         private static void TryAddSeatPostBolting(
             Beam seat,
             Part postPart,
