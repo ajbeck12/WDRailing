@@ -512,22 +512,21 @@ namespace WDRailing
                 seat.Material.MaterialString = SEAT_ANGLE_MATERIAL;
                 seat.Class = SEAT_ANGLE_CLASS;
 
-                // Rotate by corner handedness + inside/outside so it doesn't all face one way.
-                double turnZ = prevXY.X * nextXY.Y - prevXY.Y * nextXY.X;
-                bool leftTurn = (turnZ >= 0.0);
+                // Corner orientation is scenario-dependent.
+                // We resolve it from leg directions so the result is not fixed to one orientation.
+                ResolveCornerSeatOrientation(
+                    legA,
+                    legB,
+                    prevXY,
+                    nextXY,
+                    isInsideCorner,
+                    out Position.PlaneEnum plane,
+                    out Position.RotationEnum vertical,
+                    out Position.DepthEnum facing);
 
-                if (leftTurn ^ isInsideCorner)
-                {
-                    seat.Position.Plane = Position.PlaneEnum.LEFT;
-                    seat.Position.Rotation = Position.RotationEnum.BACK;
-                }
-                else
-                {
-                    seat.Position.Plane = Position.PlaneEnum.RIGHT;
-                    seat.Position.Rotation = Position.RotationEnum.FRONT;
-                }
-
-                seat.Position.Depth = Position.DepthEnum.MIDDLE;
+                seat.Position.Plane = plane;       // "horizontal" (LEFT/RIGHT)
+                seat.Position.Rotation = vertical; // "vertical"   (TOP/BELOW)
+                seat.Position.Depth = facing;      // final facing   (FRONT/BEHIND)
 
                 if (!seat.Insert())
                     return null;
@@ -549,6 +548,56 @@ namespace WDRailing
                 return null;
             }
         }
+
+        private static void ResolveCornerSeatOrientation(
+            Vector legA,
+            Vector legB,
+            Vector prevXY,
+            Vector nextXY,
+            bool isInsideCorner,
+            out Position.PlaneEnum plane,
+            out Position.RotationEnum vertical,
+            out Position.DepthEnum facing)
+        {
+            // Determine coarse compass occupancy from both legs that leave the corner.
+            // east/west decides horizontal (Plane), north/south decides vertical (Rotation).
+            double east = Math.Max(legA.X, legB.X);
+            double west = Math.Max(-legA.X, -legB.X);
+            double north = Math.Max(legA.Y, legB.Y);
+            double south = Math.Max(-legA.Y, -legB.Y);
+
+            const double axisTol = 0.15;
+            bool hasEast = east > axisTol;
+            bool hasWest = west > axisTol;
+            bool hasNorth = north > axisTol;
+            bool hasSouth = south > axisTol;
+
+            // "Horizontal" handle logic (LEFT/RIGHT)
+            if (hasEast && !hasWest) plane = Position.PlaneEnum.LEFT;
+            else if (hasWest && !hasEast) plane = Position.PlaneEnum.RIGHT;
+            else
+            {
+                double turnZ = prevXY.X * nextXY.Y - prevXY.Y * nextXY.X;
+                bool leftTurn = (turnZ >= 0.0);
+                plane = (leftTurn ^ isInsideCorner)
+                    ? Position.PlaneEnum.LEFT
+                    : Position.PlaneEnum.RIGHT;
+            }
+
+            // "Vertical" handle logic (TOP/BELOW)
+            if (hasNorth && !hasSouth) vertical = Position.RotationEnum.BELOW;
+            else if (hasSouth && !hasNorth) vertical = Position.RotationEnum.TOP;
+            else vertical = isInsideCorner ? Position.RotationEnum.BELOW : Position.RotationEnum.TOP;
+
+            // Final facing around the vertical axis (FRONT/BEHIND)
+            // (If all corners mirror in your model, swap FRONT/BEHIND here.)
+            double turnZFace = prevXY.X * nextXY.Y - prevXY.Y * nextXY.X;
+            bool leftTurnFace = (turnZFace >= 0.0);
+            facing = (leftTurnFace ^ isInsideCorner)
+                ? Position.DepthEnum.BEHIND
+                : Position.DepthEnum.FRONT;
+        }
+
 
         private static void TryAddCornerSlotsOnly(
 

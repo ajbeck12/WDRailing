@@ -431,7 +431,36 @@ namespace WDRailing
             Point bestFacePoint = fixedCornerPoint;
             Vector bestFaceNormal = left;
 
-            foreach (int sgn in new[] { +1, -1 })
+            // Prefer the fixed-rail side where the adjacent rail turns to.
+            // This avoids choosing the "outside" side-face in many ambiguous corners.
+            int preferredSign = 0;
+            {
+                Vector dFix = UnitVector(new Vector(fixedDir.X, fixedDir.Y, 0.0));
+                double turn = CrossZ(dFix, new Vector(dMove.X, dMove.Y, 0.0));
+                if (Math.Abs(turn) > 1e-6)
+                    preferredSign = (turn >= 0.0) ? +1 : -1;
+            }
+
+            if (preferredSign == 0)
+            {
+                Vector fromCorner = new Vector(movingPoint.X - fixedCornerPoint.X, movingPoint.Y - fixedCornerPoint.Y, 0.0);
+                double side = Dot2D(left, fromCorner);
+                if (Math.Abs(side) > 1e-6)
+                    preferredSign = (side >= 0.0) ? +1 : -1;
+            }
+
+            int[] signs = (preferredSign == 0)
+                ? new[] { +1, -1 }
+                : new[] { preferredSign, -preferredSign };
+
+            // Prefer moving the endpoint toward the corner (not away), when that direction is defined.
+            Vector toCorner = new Vector(fixedCornerPoint.X - movingPoint.X, fixedCornerPoint.Y - movingPoint.Y, 0.0);
+            int desiredMoveSign = 0;
+            double toward = Dot2D(new Vector(dMove.X, dMove.Y, 0.0), toCorner);
+            if (Math.Abs(toward) > 1e-6)
+                desiredMoveSign = (toward >= 0.0) ? +1 : -1;
+
+            foreach (int sgn in signs)
             {
                 Vector n = new Vector(left.X * sgn, left.Y * sgn, 0.0);
                 n = UnitVector(n);
@@ -452,17 +481,31 @@ namespace WDRailing
                     movingPoint.Y + dMove.Y * t,
                     movingPoint.Z + dMove.Z * t);
 
-                // Score = shortest valid move, with tie-break favoring closer to fixed corner.
                 double cornerDist = Distance3D(cand, fixedCornerPoint);
-                double score = Math.Abs(t) + (cornerDist * 1e-4);
+
+                double wrongSidePenalty = (preferredSign != 0 && sgn != preferredSign)
+                    ? (halfRailWidthMm * 8.0)
+                    : 0.0;
+
+                double wrongDirectionPenalty = 0.0;
+                if (desiredMoveSign != 0 && Math.Sign(t) != 0 && Math.Sign(t) != desiredMoveSign)
+                    wrongDirectionPenalty = halfRailWidthMm * 4.0;
+
+                double score = wrongSidePenalty + wrongDirectionPenalty + Math.Abs(t) + (cornerDist * 1e-3);
+
+                // Orient fitting normal toward the butt rail side for more consistent trims.
+                Vector nFit = n;
+                Vector toCand = new Vector(cand.X - q.X, cand.Y - q.Y, 0.0);
+                if (Dot2D(nFit, toCand) < 0.0)
+                    nFit = new Vector(-nFit.X, -nFit.Y, -nFit.Z);
 
                 if (score < bestScore)
                 {
                     bestScore = score;
                     best = cand;
                     bestT = t;
-                    bestFacePoint = q;
-                    bestFaceNormal = n;
+                    bestFacePoint = new Point(cand.X, cand.Y, cand.Z);
+                    bestFaceNormal = nFit;
                     found = true;
                 }
             }
