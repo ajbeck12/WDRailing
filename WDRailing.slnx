@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="WDRailing/WDRailing.csproj" Id="2e44250b-733c-4aa7-baaf-502a8f6627e5">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+</Solution>
