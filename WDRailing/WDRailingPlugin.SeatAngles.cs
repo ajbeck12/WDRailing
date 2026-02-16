@@ -83,7 +83,8 @@ namespace WDRailing
         {
             try
             {
-                // Seat dropped down by 1/2 rail depth (per your latest requirement)
+                // Regular (non-corner) post seat:
+                // keep original behavior so support seats remain unchanged.
                 double zSeat = railCenterZmm - halfRailDepthMm;
 
                 // Keep the angle located on the post face on the rail side
@@ -484,7 +485,11 @@ namespace WDRailing
                 double effectiveInsideInsetMm = Math.Max(0.0, insideInsetMm - insideOutCorrectionMm);
 
                 Vector slotAxisDir;
-                double zSeat = railCenterZmm - halfRailDepthMm;
+
+                // Corner-seat-only vertical alignment:
+                // move corner seats up so top of angle aligns to top of rail.
+                // This does NOT affect regular post support seats.
+                double zSeat = railCenterZmm;
                 Point c;
 
                 if (isInsideCorner)
@@ -564,7 +569,8 @@ namespace WDRailing
                     slotSizeIn,
                     slotStandard,
                     slotCutLengthIn,
-                    slotSpecialFirstLayer);
+                    slotSpecialFirstLayer,
+                    cornerDebugClass);
 
                 return seat;
             }
@@ -635,33 +641,86 @@ namespace WDRailing
                 // 81 class: Rotation = Front
                 case 81:
                     depth = Position.DepthEnum.FRONT;
+                    plane = Position.PlaneEnum.LEFT;
+                    rotation = Position.RotationEnum.FRONT;
                     break;
 
                 // 83 class: Rotation = Back
                 case 83:
                     depth = Position.DepthEnum.BEHIND;
+                    plane = Position.PlaneEnum.RIGHT;
+                    rotation = Position.RotationEnum.BACK;
                     break;
 
                 // 85 class: Vertical = Down, Horizontal = Left
                 case 85:
-                    rotation = Position.RotationEnum.BELOW;
-                    plane = Position.PlaneEnum.LEFT;
+                    rotation = Position.RotationEnum.TOP;
+                    plane = Position.PlaneEnum.RIGHT;
+                    depth = Position.DepthEnum.FRONT;
                     break;
 
                 // 86 class: Rotation = Back
                 case 86:
                     depth = Position.DepthEnum.BEHIND;
+                    rotation = Position.RotationEnum.BACK;
+                    plane = Position.PlaneEnum.RIGHT;
                     break;
 
                 // 88 class: Vertical = Up, Rotation = Front
                 case 88:
-                    rotation = Position.RotationEnum.TOP;
+                    rotation = Position.RotationEnum.FRONT;
                     depth = Position.DepthEnum.FRONT;
+                    plane = Position.PlaneEnum.LEFT;
                     break;
 
                 // All other classes unchanged.
                 default:
                     break;
+            }
+        }
+
+
+        private static void ResolveCornerSlotOverrides(
+            string cornerDebugClass,
+            out Position.RotationEnum leg1Rotation,
+            out Position.RotationEnum leg2Rotation,
+            out Position.DepthEnum slotDepth)
+        {
+            // Defaults for corner slots:
+            // leg1 = "down" slot, leg2 = "out" slot.
+            leg1Rotation = Position.RotationEnum.BELOW;
+            leg2Rotation = Position.RotationEnum.TOP;
+            slotDepth = Position.DepthEnum.MIDDLE;
+
+            if (!TryParseCornerClass(cornerDebugClass, out int cls))
+                return;
+
+            // Requested class overrides:
+            //  - 81,83,86,88 : BELOW slot -> FRONT
+            //  - 82,84,85,87 : TOP slot   -> FRONT
+            switch (cls)
+            {
+                case 81:
+                case 83:
+                case 86:
+                case 88:
+                    leg1Rotation = Position.RotationEnum.FRONT;
+                    break;
+
+                case 82:
+                case 84:
+                case 85:
+                case 87:
+                    leg2Rotation = Position.RotationEnum.FRONT;
+                    break;
+            }
+
+            // Note: Tekla Position.DepthEnum does not have BELOW/TOP values,
+            // so "depth below" requests are interpreted as rotation overrides.
+            if (cls == 84)
+            {
+                // Keep the first slot explicitly on BELOW rotation for class 84.
+                leg1Rotation = Position.RotationEnum.BELOW;
             }
         }
 
@@ -735,6 +794,7 @@ namespace WDRailing
         }
 
 
+
         private static void TryAddCornerSlotsOnly(
 
             Beam seat,
@@ -744,26 +804,39 @@ namespace WDRailing
             double slotSizeIn,
             string slotStandard,
             double slotCutLengthIn,
-            bool slotSpecialFirstLayer)
+            bool slotSpecialFirstLayer,
+            string cornerDebugClass = null)
         {
             if (seat == null) return;
 
+            // Per-corner class slot rotation overrides from field validation.
+            ResolveCornerSlotOverrides(
+                string.IsNullOrWhiteSpace(cornerDebugClass) ? seat.Class : cornerDebugClass,
+                out Position.RotationEnum leg1Rotation,
+                out Position.RotationEnum leg2Rotation,
+                out Position.DepthEnum slotDepth);
+
             try
             {
-                Vector ux = GetDirXYUnit(slotAxisDir);
-                Vector up = new Vector(0.0, 0.0, 1.0);
+                // Corner-seat slots must be located on the two angle legs and
+                // their slot handle direction must run along the seat length (global Z).
+                //
+                // Use the inserted seat local coordinate system so class-based orientation
+                // overrides (plane/rotation/depth) are respected automatically.
+                var cs = seat.GetCoordinateSystem();
 
-                // side = ux x up
-                Vector side = new Vector(
-                    ux.Y * up.Z - ux.Z * up.Y,
-                    ux.Z * up.X - ux.X * up.Z,
-                    ux.X * up.Y - ux.Y * up.X);
+                // Local beam axes:
+                //   X = seat length axis (vertical for corner seats)
+                //   Y/Z = cross-section axes (the two leg directions in plan)
+                Vector axisX = NormalizeVectorOrFallback(cs.AxisX, new Vector(0.0, 0.0, 1.0));
+                Vector axisY = NormalizeVectorOrFallback(cs.AxisY, GetDirXYUnit(slotAxisDir));
 
-                double sideLen = Math.Sqrt(side.X * side.X + side.Y * side.Y + side.Z * side.Z);
-                if (sideLen < 1e-9)
-                    side = new Vector(1.0, 0.0, 0.0);
-                else
-                    side = new Vector(side.X / sideLen, side.Y / sideLen, side.Z / sideLen);
+                // axisZ = axisX x axisY (right-hand orthonormal)
+                Vector axisZ = new Vector(
+                    axisX.Y * axisY.Z - axisX.Z * axisY.Y,
+                    axisX.Z * axisY.X - axisX.X * axisY.Z,
+                    axisX.X * axisY.Y - axisX.Y * axisY.X);
+                axisZ = NormalizeVectorOrFallback(axisZ, new Vector(-axisY.Y, axisY.X, 0.0));
 
                 Point mid = new Point(
                     (seat.StartPoint.X + seat.EndPoint.X) * 0.5,
@@ -774,54 +847,85 @@ namespace WDRailing
                 double legThicknessHalfMm = InchesToMm(0.125 * 0.5);
                 double orientLenMm = Math.Max(5.0, InchesToMm(0.25));
 
-                // leg 1 slot (down from bend)
+                // Leg 1: offset from bend along local Y (plus tiny local Z bias so the hole
+                // center is on the leg material instead of exactly in the bend corner).
                 Point slot1 = new Point(
-                    mid.X - up.X * bendOffsetMm + side.X * legThicknessHalfMm,
-                    mid.Y - up.Y * bendOffsetMm + side.Y * legThicknessHalfMm,
-                    mid.Z - up.Z * bendOffsetMm + side.Z * legThicknessHalfMm);
+                    mid.X + axisY.X * bendOffsetMm + axisZ.X * legThicknessHalfMm,
+                    mid.Y + axisY.Y * bendOffsetMm + axisZ.Y * legThicknessHalfMm,
+                    mid.Z + axisY.Z * bendOffsetMm + axisZ.Z * legThicknessHalfMm);
 
+                // Leg 2: offset from bend along local Z (plus tiny local Y bias).
+                Point slot2 = new Point(
+                    mid.X + axisZ.X * bendOffsetMm + axisY.X * legThicknessHalfMm,
+                    mid.Y + axisZ.Y * bendOffsetMm + axisY.Y * legThicknessHalfMm,
+                    mid.Z + axisZ.Z * bendOffsetMm + axisY.Z * legThicknessHalfMm);
+
+                // IMPORTANT:
+                // pass axisX as the slot axis so handles run in seat-length direction (Z).
                 TryInsertSeatSlotHole(
                     seat,
                     slot1,
-                    ux,
+                    axisX,
                     orientLenMm,
                     slotStandard,
                     slotCutLengthIn,
                     slotSizeIn,
                     slotC2CIn,
                     slotSpecialFirstLayer,
-                    Position.RotationEnum.BELOW);
+                    leg1Rotation,
+                    slotDepth);
 
-                // leg 2 slot (out from bend, opposite side)
-                Vector outFromLeg1 = new Vector(-side.X, -side.Y, -side.Z);
-                Point slot2 = new Point(
-                    mid.X + outFromLeg1.X * bendOffsetMm - up.X * legThicknessHalfMm,
-                    mid.Y + outFromLeg1.Y * bendOffsetMm - up.Y * legThicknessHalfMm,
-                    mid.Z + outFromLeg1.Z * bendOffsetMm - up.Z * legThicknessHalfMm);
-
-                bool ok2 = TryInsertSeatSlotHole(
+                TryInsertSeatSlotHole(
                     seat,
                     slot2,
-                    ux,
+                    axisX,
                     orientLenMm,
                     slotStandard,
                     slotCutLengthIn,
                     slotSizeIn,
                     slotC2CIn,
                     slotSpecialFirstLayer,
-                    Position.RotationEnum.BACK);
-
-                // fallback orientation for API/version differences
-                if (!ok2)
+                    leg2Rotation,
+                    slotDepth);
+            }
+            catch
+            {
+                // Best-effort fallback: keep legacy behavior if coordinate-system
+                // resolution ever fails in a specific Tekla runtime.
+                try
                 {
-                    Point slot2Alt = new Point(
-                        mid.X + outFromLeg1.X * bendOffsetMm + up.X * legThicknessHalfMm,
-                        mid.Y + outFromLeg1.Y * bendOffsetMm + up.Y * legThicknessHalfMm,
-                        mid.Z + outFromLeg1.Z * bendOffsetMm + up.Z * legThicknessHalfMm);
+                    Vector ux = GetDirXYUnit(slotAxisDir);
+                    Vector up = new Vector(0.0, 0.0, 1.0);
+
+                    Vector side = new Vector(
+                        ux.Y * up.Z - ux.Z * up.Y,
+                        ux.Z * up.X - ux.X * up.Z,
+                        ux.X * up.Y - ux.Y * up.X);
+
+                    double sideLen = Math.Sqrt(side.X * side.X + side.Y * side.Y + side.Z * side.Z);
+                    if (sideLen < 1e-9)
+                        side = new Vector(1.0, 0.0, 0.0);
+                    else
+                        side = new Vector(side.X / sideLen, side.Y / sideLen, side.Z / sideLen);
+
+                    Point mid = new Point(
+                        (seat.StartPoint.X + seat.EndPoint.X) * 0.5,
+                        (seat.StartPoint.Y + seat.EndPoint.Y) * 0.5,
+                        (seat.StartPoint.Z + seat.EndPoint.Z) * 0.5);
+
+                    double bendOffsetMm = InchesToMm(holeLineFromBendIn);
+                    double legThicknessHalfMm = InchesToMm(0.125 * 0.5);
+                    double orientLenMm = Math.Max(5.0, InchesToMm(0.25));
+
+                    // legacy-style offsets (retained only as fallback)
+                    Point slot1 = new Point(
+                        mid.X - up.X * bendOffsetMm + side.X * legThicknessHalfMm,
+                        mid.Y - up.Y * bendOffsetMm + side.Y * legThicknessHalfMm,
+                        mid.Z - up.Z * bendOffsetMm + side.Z * legThicknessHalfMm);
 
                     TryInsertSeatSlotHole(
                         seat,
-                        slot2Alt,
+                        slot1,
                         ux,
                         orientLenMm,
                         slotStandard,
@@ -829,12 +933,32 @@ namespace WDRailing
                         slotSizeIn,
                         slotC2CIn,
                         slotSpecialFirstLayer,
-                        Position.RotationEnum.TOP);
+                        leg1Rotation,
+                        slotDepth);
+
+                    Vector outFromLeg1 = new Vector(-side.X, -side.Y, -side.Z);
+                    Point slot2 = new Point(
+                        mid.X + outFromLeg1.X * bendOffsetMm - up.X * legThicknessHalfMm,
+                        mid.Y + outFromLeg1.Y * bendOffsetMm - up.Y * legThicknessHalfMm,
+                        mid.Z + outFromLeg1.Z * bendOffsetMm - up.Z * legThicknessHalfMm);
+
+                    TryInsertSeatSlotHole(
+                        seat,
+                        slot2,
+                        ux,
+                        orientLenMm,
+                        slotStandard,
+                        slotCutLengthIn,
+                        slotSizeIn,
+                        slotC2CIn,
+                        slotSpecialFirstLayer,
+                        leg2Rotation,
+                        slotDepth);
                 }
-            }
-            catch
-            {
-                // best-effort only
+                catch
+                {
+                    // best-effort only
+                }
             }
         }
 
