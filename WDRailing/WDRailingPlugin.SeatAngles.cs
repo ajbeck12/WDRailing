@@ -572,17 +572,17 @@ namespace WDRailing
             cls = 0;
             if (string.IsNullOrWhiteSpace(cornerDebugClass)) return false;
             return int.TryParse(
-                cornerDebugClass,
+                cornerDebugClass.Trim(),
                 NumberStyles.Integer,
                 CultureInfo.InvariantCulture,
                 out cls);
         }
 
         private static bool NeedsInsideCornerDiagonalNudge(string cornerDebugClass)
-        {
-            if (!TryParseCornerClass(cornerDebugClass, out int cls)) return false;
-            return cls >= 85 && cls <= 88;
-        }
+{
+    if (!TryParseCornerClass(cornerDebugClass, out int cls)) return false;
+    return cls >= 85 && cls <= 88;
+}
 
         /// <summary>
         /// Applies explicit class-based orientation overrides supplied from field validation.
@@ -601,49 +601,35 @@ namespace WDRailing
 
             switch (cls)
             {
-                // 81: Vertical Up, Rotation Front, Horizontal Left
+                // 81: Rotation -> Front (only)
                 case 81:
-                    plane = Position.PlaneEnum.LEFT;
-                    vertical = Position.RotationEnum.TOP;
                     facing = Position.DepthEnum.FRONT;
                     break;
 
-                // 82: already correct
-                case 82:
-                    break;
-
-                // 83: Vertical Down, Rotation Back, Horizontal Right
+                // 83: Rotation -> Back (only)
                 case 83:
-                    plane = Position.PlaneEnum.RIGHT;
-                    vertical = Position.RotationEnum.BELOW;
                     facing = Position.DepthEnum.BEHIND;
                     break;
 
-                // 84: Horizontal Right only
-                case 84:
-                    plane = Position.PlaneEnum.RIGHT;
-                    break;
-
-                // 85: move handled separately; only Horizontal Left
+                // 85: Vertical -> Down, Horizontal -> Left
                 case 85:
+                    vertical = Position.RotationEnum.BELOW;
                     plane = Position.PlaneEnum.LEFT;
                     break;
 
-                // 86: move handled separately; Vertical Down, Rotation Back, Horizontal Right
+                // 86: Rotation -> Back (only)
                 case 86:
-                    plane = Position.PlaneEnum.RIGHT;
-                    vertical = Position.RotationEnum.BELOW;
                     facing = Position.DepthEnum.BEHIND;
                     break;
 
-                // 87: move handled separately; orientation unchanged
-                case 87:
-                    break;
-
-                // 88: move handled separately; Vertical Up, Rotation Front
+                // 88: Vertical -> Up, Rotation -> Front
                 case 88:
                     vertical = Position.RotationEnum.TOP;
                     facing = Position.DepthEnum.FRONT;
+                    break;
+
+                // 82, 84, 87 => unchanged
+                default:
                     break;
             }
         }
