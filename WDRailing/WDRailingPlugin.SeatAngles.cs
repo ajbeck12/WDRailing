@@ -549,6 +549,13 @@ namespace WDRailing
                 if (!seat.Insert())
                     return null;
 
+                // Re-apply orientation after insert so stale/default values cannot persist.
+                // This makes class-based overrides deterministic in-model.
+                seat.Position.Plane = plane;
+                seat.Position.Rotation = vertical;
+                seat.Position.Depth = facing;
+                seat.Modify();
+
                 TryAddCornerSlotsOnly(
                     seat,
                     slotAxisDir,
@@ -571,11 +578,30 @@ namespace WDRailing
         {
             cls = 0;
             if (string.IsNullOrWhiteSpace(cornerDebugClass)) return false;
-            return int.TryParse(
+
+            // Primary path: exact integer class string ("81", "85", etc.)
+            if (int.TryParse(
                 cornerDebugClass.Trim(),
                 NumberStyles.Integer,
                 CultureInfo.InvariantCulture,
-                out cls);
+                out cls))
+            {
+                return true;
+            }
+
+            // Fallback: extract first integer token from mixed strings (defensive)
+            // e.g. "Class 85" -> 85
+            var m = Regex.Match(cornerDebugClass, @"-?\d+");
+            if (m.Success)
+            {
+                return int.TryParse(
+                    m.Value,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out cls);
+            }
+
+            return false;
         }
 
         private static bool NeedsInsideCornerDiagonalNudge(string cornerDebugClass)
@@ -597,7 +623,7 @@ namespace WDRailing
             ref Position.RotationEnum vertical,
             ref Position.DepthEnum facing)
         {
-            // Explicit class overrides requested by user on 2026-02-16.
+            // Explicit class overrides requested by user.
             // Mapping terms:
             // Horizontal Left/Right -> Position.Plane LEFT/RIGHT
             // Vertical Up/Down      -> Position.Rotation TOP/BELOW
@@ -606,34 +632,34 @@ namespace WDRailing
 
             switch (cls)
             {
-                // 81 corner: Rotation = Front
+                // 81 class: Rotation = Front
                 case 81:
                     facing = Position.DepthEnum.FRONT;
                     break;
 
-                // 83 corner: Rotation = Back
+                // 83 class: Rotation = Back
                 case 83:
                     facing = Position.DepthEnum.BEHIND;
                     break;
 
-                // 85 corner: Vertical = Down, Horizontal = Left
+                // 85 class: Vertical = Down, Horizontal = Left
                 case 85:
                     vertical = Position.RotationEnum.BELOW;
                     plane = Position.PlaneEnum.LEFT;
                     break;
 
-                // 86 corner: Rotation = Back
+                // 86 class: Rotation = Back
                 case 86:
                     facing = Position.DepthEnum.BEHIND;
                     break;
 
-                // 88 corner: Vertical = Up, Rotation = Front
+                // 88 class: Vertical = Up, Rotation = Front
                 case 88:
                     vertical = Position.RotationEnum.TOP;
                     facing = Position.DepthEnum.FRONT;
                     break;
 
-                // All others unchanged for now.
+                // All other classes unchanged.
                 default:
                     break;
             }
