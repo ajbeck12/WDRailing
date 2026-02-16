@@ -579,10 +579,10 @@ namespace WDRailing
         }
 
         private static bool NeedsInsideCornerDiagonalNudge(string cornerDebugClass)
-{
-    if (!TryParseCornerClass(cornerDebugClass, out int cls)) return false;
-    return cls >= 85 && cls <= 88;
-}
+        {
+            if (!TryParseCornerClass(cornerDebugClass, out int cls)) return false;
+            return cls >= 85 && cls <= 88;
+        }
 
         /// <summary>
         /// Applies explicit class-based orientation overrides supplied from field validation.
@@ -628,7 +628,13 @@ namespace WDRailing
                     facing = Position.DepthEnum.FRONT;
                     break;
 
-                // 82, 84, 87 => unchanged
+                // 82, 84, 87 => unchanged (all other classes are currently accepted as-is)
+                case 82:
+                case 84:
+                case 87:
+                    break;
+
+                // Any other class => unchanged
                 default:
                     break;
             }
