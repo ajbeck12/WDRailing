@@ -579,10 +579,10 @@ namespace WDRailing
         }
 
         private static bool NeedsInsideCornerDiagonalNudge(string cornerDebugClass)
-{
-    if (!TryParseCornerClass(cornerDebugClass, out int cls)) return false;
-    return cls >= 85 && cls <= 88;
-}
+        {
+            if (!TryParseCornerClass(cornerDebugClass, out int cls)) return false;
+            return cls >= 85 && cls <= 88;
+        }
 
         /// <summary>
         /// Applies explicit class-based orientation overrides supplied from field validation.
@@ -597,38 +597,43 @@ namespace WDRailing
             ref Position.RotationEnum vertical,
             ref Position.DepthEnum facing)
         {
+            // Explicit class overrides requested by user on 2026-02-16.
+            // Mapping terms:
+            // Horizontal Left/Right -> Position.Plane LEFT/RIGHT
+            // Vertical Up/Down      -> Position.Rotation TOP/BELOW
+            // Rotation Front/Back   -> Position.Depth FRONT/BEHIND
             if (!TryParseCornerClass(cornerDebugClass, out int cls)) return;
 
             switch (cls)
             {
-                // 81: Rotation -> Front (only)
+                // 81 corner: Rotation = Front
                 case 81:
                     facing = Position.DepthEnum.FRONT;
                     break;
 
-                // 83: Rotation -> Back (only)
+                // 83 corner: Rotation = Back
                 case 83:
                     facing = Position.DepthEnum.BEHIND;
                     break;
 
-                // 85: Vertical -> Down, Horizontal -> Left
+                // 85 corner: Vertical = Down, Horizontal = Left
                 case 85:
                     vertical = Position.RotationEnum.BELOW;
                     plane = Position.PlaneEnum.LEFT;
                     break;
 
-                // 86: Rotation -> Back (only)
+                // 86 corner: Rotation = Back
                 case 86:
                     facing = Position.DepthEnum.BEHIND;
                     break;
 
-                // 88: Vertical -> Up, Rotation -> Front
+                // 88 corner: Vertical = Up, Rotation = Front
                 case 88:
                     vertical = Position.RotationEnum.TOP;
                     facing = Position.DepthEnum.FRONT;
                     break;
 
-                // 82, 84, 87 => unchanged
+                // All others unchanged for now.
                 default:
                     break;
             }
