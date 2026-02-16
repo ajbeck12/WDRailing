@@ -666,6 +666,12 @@ namespace WDRailing
                     rotation = Position.RotationEnum.BACK;
                     break;
 
+                case 84:
+                    depth = Position.DepthEnum.BEHIND;
+                    plane = Position.PlaneEnum.LEFT;
+                    rotation = Position.RotationEnum.BELOW;
+                    break;
+
                 // 85 class: Vertical = Down, Horizontal = Left
                 case 85:
                     rotation = Position.RotationEnum.TOP;
