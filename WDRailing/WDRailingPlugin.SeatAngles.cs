@@ -537,14 +537,14 @@ namespace WDRailing
                     nextXY,
                     isInsideCorner,
                     out Position.PlaneEnum plane,
-                    out Position.RotationEnum vertical,
-                    out Position.DepthEnum facing);
+                    out Position.RotationEnum rotation,
+                    out Position.DepthEnum depth);
 
-                ApplyCornerClassOverrides(cornerDebugClass, ref plane, ref vertical, ref facing);
+                ApplyCornerClassOverrides(cornerDebugClass, ref plane, ref rotation, ref depth);
 
-                seat.Position.Plane = plane;       // "horizontal" (LEFT/RIGHT)
-                seat.Position.Rotation = vertical; // "vertical"   (TOP/BELOW)
-                seat.Position.Depth = facing;      // final facing   (FRONT/BEHIND)
+                seat.Position.Plane = plane;         // LEFT/RIGHT
+                seat.Position.Rotation = rotation;   // TOP/BELOW
+                seat.Position.Depth = depth;         // FRONT/BEHIND
 
                 if (!seat.Insert())
                     return null;
@@ -552,8 +552,8 @@ namespace WDRailing
                 // Re-apply orientation after insert so stale/default values cannot persist.
                 // This makes class-based overrides deterministic in-model.
                 seat.Position.Plane = plane;
-                seat.Position.Rotation = vertical;
-                seat.Position.Depth = facing;
+                seat.Position.Rotation = rotation;
+                seat.Position.Depth = depth;
                 seat.Modify();
 
                 TryAddCornerSlotsOnly(
@@ -615,13 +615,13 @@ namespace WDRailing
         /// Mapping terms:
         /// - Horizontal Left/Right -> Position.Plane LEFT/RIGHT
         /// - Vertical Up/Down      -> Position.Rotation TOP/BELOW
-        /// - Rotation Front/Back   -> Position.Depth FRONT/BEHIND
+        /// - Facing Front/Back     -> Position.Depth FRONT/BEHIND
         /// </summary>
         private static void ApplyCornerClassOverrides(
             string cornerDebugClass,
             ref Position.PlaneEnum plane,
-            ref Position.RotationEnum vertical,
-            ref Position.DepthEnum facing)
+            ref Position.RotationEnum rotation,
+            ref Position.DepthEnum depth)
         {
             // Explicit class overrides requested by user.
             // Mapping terms:
@@ -634,29 +634,29 @@ namespace WDRailing
             {
                 // 81 class: Rotation = Front
                 case 81:
-                    facing = Position.DepthEnum.FRONT;
+                    depth = Position.DepthEnum.FRONT;
                     break;
 
                 // 83 class: Rotation = Back
                 case 83:
-                    facing = Position.DepthEnum.BEHIND;
+                    depth = Position.DepthEnum.BEHIND;
                     break;
 
                 // 85 class: Vertical = Down, Horizontal = Left
                 case 85:
-                    vertical = Position.RotationEnum.BELOW;
+                    rotation = Position.RotationEnum.BELOW;
                     plane = Position.PlaneEnum.LEFT;
                     break;
 
                 // 86 class: Rotation = Back
                 case 86:
-                    facing = Position.DepthEnum.BEHIND;
+                    depth = Position.DepthEnum.BEHIND;
                     break;
 
                 // 88 class: Vertical = Up, Rotation = Front
                 case 88:
-                    vertical = Position.RotationEnum.TOP;
-                    facing = Position.DepthEnum.FRONT;
+                    rotation = Position.RotationEnum.TOP;
+                    depth = Position.DepthEnum.FRONT;
                     break;
 
                 // All other classes unchanged.
@@ -673,8 +673,8 @@ namespace WDRailing
             Vector nextXY,
             bool isInsideCorner,
             out Position.PlaneEnum plane,
-            out Position.RotationEnum vertical,
-            out Position.DepthEnum facing)
+            out Position.RotationEnum rotation,
+            out Position.DepthEnum depth)
         {
             // Determine coarse compass occupancy from both legs that leave the corner.
             // east/west decides horizontal (Plane), north/south decides vertical (Rotation).
@@ -704,12 +704,12 @@ namespace WDRailing
             // Vertical handle:
             // - rail to the north => BELOW ("down")
             // - rail to the south => TOP
-            if (hasNorth && !hasSouth) vertical = Position.RotationEnum.BELOW;
-            else if (hasSouth && !hasNorth) vertical = Position.RotationEnum.TOP;
+            if (hasNorth && !hasSouth) rotation = Position.RotationEnum.BELOW;
+            else if (hasSouth && !hasNorth) rotation = Position.RotationEnum.TOP;
             else
             {
                 double sy = (legA.Y + legB.Y);
-                vertical = (sy >= 0.0) ? Position.RotationEnum.BELOW : Position.RotationEnum.TOP;
+                rotation = (sy >= 0.0) ? Position.RotationEnum.BELOW : Position.RotationEnum.TOP;
             }
 
             // Facing (Depth FRONT/BEHIND):
@@ -722,13 +722,13 @@ namespace WDRailing
                 bool northSide = hasNorth;
                 bool baseFront = (eastSide == northSide); // NE/SW vs NW/SE
                 if (isInsideCorner) baseFront = !baseFront;
-                facing = baseFront ? Position.DepthEnum.FRONT : Position.DepthEnum.BEHIND;
+                depth = baseFront ? Position.DepthEnum.FRONT : Position.DepthEnum.BEHIND;
             }
             else
             {
                 double turnZ = prevXY.X * nextXY.Y - prevXY.Y * nextXY.X;
                 bool leftTurn = (turnZ >= 0.0);
-                facing = (leftTurn ^ isInsideCorner)
+                depth = (leftTurn ^ isInsideCorner)
                     ? Position.DepthEnum.BEHIND
                     : Position.DepthEnum.FRONT;
             }
