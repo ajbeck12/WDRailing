@@ -506,6 +506,17 @@ namespace WDRailing
                     slotAxisDir = new Vector(insideBis.X, insideBis.Y, 0.0);
                 }
 
+                // User-calibrated inside-class handle nudge:
+                // 85/86/87/88 -> move 1/8" diagonally toward inside corner
+                if (isInsideCorner && NeedsInsideCornerDiagonalNudge(cornerDebugClass))
+                {
+                    double nudgeMm = InchesToMm(0.125);
+                    c = new Point(
+                        c.X + insideBis.X * nudgeMm,
+                        c.Y + insideBis.Y * nudgeMm,
+                        c.Z);
+                }
+
                 // Keep handles up/down so the angle stays on its side.
                 double L = GetSeatAngleLengthMm();
                 Point a = new Point(c.X, c.Y, c.Z - (L * 0.5));
@@ -528,6 +539,8 @@ namespace WDRailing
                     out Position.PlaneEnum plane,
                     out Position.RotationEnum vertical,
                     out Position.DepthEnum facing);
+
+                ApplyCornerClassOverrides(cornerDebugClass, ref plane, ref vertical, ref facing);
 
                 seat.Position.Plane = plane;       // "horizontal" (LEFT/RIGHT)
                 seat.Position.Rotation = vertical; // "vertical"   (TOP/BELOW)
@@ -553,6 +566,88 @@ namespace WDRailing
                 return null;
             }
         }
+
+        private static bool TryParseCornerClass(string cornerDebugClass, out int cls)
+        {
+            cls = 0;
+            if (string.IsNullOrWhiteSpace(cornerDebugClass)) return false;
+            return int.TryParse(
+                cornerDebugClass,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out cls);
+        }
+
+        private static bool NeedsInsideCornerDiagonalNudge(string cornerDebugClass)
+        {
+            if (!TryParseCornerClass(cornerDebugClass, out int cls)) return false;
+            return cls >= 85 && cls <= 88;
+        }
+
+        /// <summary>
+        /// Applies explicit class-based orientation overrides supplied from field validation.
+        /// Mapping terms:
+        /// - Horizontal Left/Right -> Position.Plane LEFT/RIGHT
+        /// - Vertical Up/Down      -> Position.Rotation TOP/BELOW
+        /// - Rotation Front/Back   -> Position.Depth FRONT/BEHIND
+        /// </summary>
+        private static void ApplyCornerClassOverrides(
+            string cornerDebugClass,
+            ref Position.PlaneEnum plane,
+            ref Position.RotationEnum vertical,
+            ref Position.DepthEnum facing)
+        {
+            if (!TryParseCornerClass(cornerDebugClass, out int cls)) return;
+
+            switch (cls)
+            {
+                // 81: Vertical Up, Rotation Front, Horizontal Left
+                case 81:
+                    plane = Position.PlaneEnum.LEFT;
+                    vertical = Position.RotationEnum.TOP;
+                    facing = Position.DepthEnum.FRONT;
+                    break;
+
+                // 82: already correct
+                case 82:
+                    break;
+
+                // 83: Vertical Down, Rotation Back, Horizontal Right
+                case 83:
+                    plane = Position.PlaneEnum.RIGHT;
+                    vertical = Position.RotationEnum.BELOW;
+                    facing = Position.DepthEnum.BEHIND;
+                    break;
+
+                // 84: Horizontal Right only
+                case 84:
+                    plane = Position.PlaneEnum.RIGHT;
+                    break;
+
+                // 85: move handled separately; only Horizontal Left
+                case 85:
+                    plane = Position.PlaneEnum.LEFT;
+                    break;
+
+                // 86: move handled separately; Vertical Down, Rotation Back, Horizontal Right
+                case 86:
+                    plane = Position.PlaneEnum.RIGHT;
+                    vertical = Position.RotationEnum.BELOW;
+                    facing = Position.DepthEnum.BEHIND;
+                    break;
+
+                // 87: move handled separately; orientation unchanged
+                case 87:
+                    break;
+
+                // 88: move handled separately; Vertical Up, Rotation Front
+                case 88:
+                    vertical = Position.RotationEnum.TOP;
+                    facing = Position.DepthEnum.FRONT;
+                    break;
+            }
+        }
+
 
         private static void ResolveCornerSeatOrientation(
             Vector legA,
