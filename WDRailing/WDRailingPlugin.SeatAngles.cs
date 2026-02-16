@@ -50,6 +50,19 @@ namespace WDRailing
         }
 
 
+        private static Vector NormalizeVectorOrFallback(Vector v, Vector fallback)
+        {
+            double len = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+            if (len < 1e-9)
+            {
+                double flen = Math.Sqrt(fallback.X * fallback.X + fallback.Y * fallback.Y + fallback.Z * fallback.Z);
+                if (flen < 1e-9) return new Vector(1.0, 0.0, 0.0);
+                return new Vector(fallback.X / flen, fallback.Y / flen, fallback.Z / flen);
+            }
+            return new Vector(v.X / len, v.Y / len, v.Z / len);
+        }
+
+
         private static double GetHalfRailWidthMm()
         {
             // half rail width (OD 1.5" fallback)
@@ -358,7 +371,8 @@ namespace WDRailing
     double slotWidthIn,
     double slotC2CIn,
     bool slotSpecialFirstLayer,
-    Position.RotationEnum rotation = Position.RotationEnum.BELOW)
+    Position.RotationEnum rotation = Position.RotationEnum.BELOW,
+    Position.DepthEnum depth = Position.DepthEnum.MIDDLE)
         {
             Point orientP2 = new Point(
                 slotCenter.X + ux.X * orientLenMm,
@@ -381,7 +395,7 @@ namespace WDRailing
 
             slotHole.Position.Plane = Position.PlaneEnum.MIDDLE;
             slotHole.Position.Rotation = rotation; // BELOW for down slot, TOP for out slot
-            slotHole.Position.Depth = Position.DepthEnum.MIDDLE;
+            slotHole.Position.Depth = depth;
 
             ApplyNoAssemblyHardware(slotHole);
             TrySetDoubleProperty(slotHole, "CutLength", InchesToMm(slotCutLengthIn));
