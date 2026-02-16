@@ -571,8 +571,16 @@ namespace WDRailing
         {
             cls = 0;
             if (string.IsNullOrWhiteSpace(cornerDebugClass)) return false;
+            string trimmed = cornerDebugClass.Trim();
+            if (int.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out cls))
+                return true;
+
+            // Field logs may pass labels such as "Class 83" / "83 corner".
+            // Accept the first integer token so overrides still apply.
+            var match = Regex.Match(trimmed, @"[-+]?\d+");
+            if (!match.Success) return false;
             return int.TryParse(
-                cornerDebugClass.Trim(),
+                match.Value,
                 NumberStyles.Integer,
                 CultureInfo.InvariantCulture,
                 out cls);
