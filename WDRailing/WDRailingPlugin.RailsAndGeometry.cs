@@ -193,6 +193,7 @@ namespace WDRailing
                 var capStart = new bool[n];
                 var capEnd = new bool[n];
                 var cornerSeats = new List<CornerSeatSpec>();
+                var fitSpecs = new List<CornerFitSpec>();  // FIX: declare fitSpecs here
 
                 // Keep unmodified row centerlines for stable corner-center math.
                 var baseStarts = new Point[n];
@@ -205,8 +206,8 @@ namespace WDRailing
 
                 if (!isClosed)
                 {
-                    capStart[0] = true;          // open polyline start
-                    capEnd[n - 1] = true;        // open polyline end
+                    capStart[0] = true;       // open polyline start
+                    capEnd[n - 1] = true;     // open polyline end
                 }
 
                 int cornerCount = isClosed ? n : (n - 1);
@@ -218,43 +219,48 @@ namespace WDRailing
                     Vector prevDir = UnitVector(sides[prev].Dir);
                     Vector nextDir = UnitVector(sides[next].Dir);
 
-                    // Determine inside/outside using run turn and rail side.
+                    // FIX: compute cornerPt FIRST so we can use it to extend the capped end.
+                    Point cornerPt;
+                    if (TryIntersectLines2D(baseEnds[prev], prevDir, baseStarts[next], nextDir, out Point xpt))
+                    {
+                        double z = 0.5 * (ends[prev].Z + starts[next].Z);
+                        cornerPt = new Point(xpt.X, xpt.Y, z);
+                    }
+                    else
+                    {
+                        cornerPt = new Point(
+                            0.5 * (baseEnds[prev].X + baseStarts[next].X),
+                            0.5 * (baseEnds[prev].Y + baseStarts[next].Y),
+                            0.5 * (ends[prev].Z + starts[next].Z));
+                    }
+
+                    // Inside/outside determination (needed for ComputeButtStartToSideFace and seat angle).
                     double turnForOffset = CrossZ(prevDir, nextDir);
                     double lateralForOffset = 0.5 * (sides[prev].RailLateralMm + sides[next].RailLateralMm);
-                    if (Math.Abs(lateralForOffset) < 1e-6)
-                        lateralForOffset = sides[prev].RailLateralMm;
-                    if (Math.Abs(lateralForOffset) < 1e-6)
-                        lateralForOffset = 1.0;
-
+                    if (Math.Abs(lateralForOffset) < 1e-6) lateralForOffset = sides[prev].RailLateralMm;
+                    if (Math.Abs(lateralForOffset) < 1e-6) lateralForOffset = 1.0;
                     bool isInsideForOffset = (turnForOffset * lateralForOffset) < 0.0;
+
+                    // FIX: cornerButtOffsetMm is simply halfRailWidthMm.
+                    double cornerButtOffsetMm = halfRailWidthMm;
 
                     // Option A: PREV is non-butt (cap at end), NEXT is butt side.
                     bool optPrevCapOk = ComputeButtStartToSideFace(
-                        ends[prev],          // fixed side corner point
-                        prevDir,             // fixed side direction
-                        sides[prev].Left,    // fixed side left
-                        starts[next],        // moving butt point
-                        nextDir,             // moving butt direction
-                        isInsideForOffset,
-                        halfRailWidthMm,
-                        out Point optNextStart,
-                        out double moveNextButtMm,
-                        out Point optPrevCapFacePoint,
-                        out Vector optPrevCapFaceNormal);
+                        ends[prev], prevDir, sides[prev].Left,
+                        starts[next], nextDir,
+                        isInsideForOffset,        // FIX: pass required isInsideCorner arg
+                        cornerButtOffsetMm,
+                        out Point optNextStart, out double moveNextButtMm,
+                        out Point optPrevCapFacePoint, out Vector optPrevCapFaceNormal);
 
                     // Option B: NEXT is non-butt (cap at start), PREV is butt side.
                     bool optNextCapOk = ComputeButtStartToSideFace(
-                        starts[next],        // fixed side corner point
-                        nextDir,             // fixed side direction
-                        sides[next].Left,    // fixed side left
-                        ends[prev],          // moving butt point
-                        prevDir,             // moving butt direction
-                        isInsideForOffset,
-                        halfRailWidthMm,
-                        out Point optPrevEnd,
-                        out double movePrevButtMm,
-                        out Point optNextCapFacePoint,
-                        out Vector optNextCapFaceNormal);
+                        starts[next], nextDir, sides[next].Left,
+                        ends[prev], prevDir,
+                        isInsideForOffset,        // FIX: pass required isInsideCorner arg
+                        cornerButtOffsetMm,
+                        out Point optPrevEnd, out double movePrevButtMm,
+                        out Point optNextCapFacePoint, out Vector optNextCapFaceNormal);
 
                     bool choosePrevCap = false;
                     bool chooseNextCap = false;
@@ -276,46 +282,57 @@ namespace WDRailing
                     if (choosePrevCap)
                     {
                         // PREV is non-butt + capped. NEXT butts into PREV side face.
-                        starts[next] = optNextStart;
+                        starts[next] = optNextStart;   // butt side correctly positioned
                         capEnd[prev] = true;
+
+                        // FIX: extend the capped end forward to the face of the butt rail.
+                        // Without this the cap floats one rail-width short of the corner.
+                        ends[prev] = new Point(
+                            cornerPt.X - prevDir.X * cornerButtOffsetMm,
+                            cornerPt.Y - prevDir.Y * cornerButtOffsetMm,
+                            ends[prev].Z);
+
+                        fitSpecs.Add(new CornerFitSpec
+                        {
+                            SideIndex = next,
+                            AtStart = true,
+                            FacePoint = optPrevCapFacePoint,
+                            FaceNormal = optPrevCapFaceNormal
+                        });
                     }
                     else if (chooseNextCap)
                     {
                         // NEXT is non-butt + capped. PREV butts into NEXT side face.
-                        ends[prev] = optPrevEnd;
+                        ends[prev] = optPrevEnd;       // butt side correctly positioned
                         capStart[next] = true;
+
+                        // FIX: extend the capped start backward to the face of the butt rail.
+                        starts[next] = new Point(
+                            cornerPt.X + nextDir.X * cornerButtOffsetMm,
+                            cornerPt.Y + nextDir.Y * cornerButtOffsetMm,
+                            starts[next].Z);
+
+                        fitSpecs.Add(new CornerFitSpec
+                        {
+                            SideIndex = prev,
+                            AtStart = false,
+                            FacePoint = optNextCapFacePoint,
+                            FaceNormal = optNextCapFaceNormal
+                        });
                     }
                     else
                     {
-                        // Fallback: cap previous side end.
+                        // Fallback: just cap previous side end, no butt adjustment.
                         capEnd[prev] = true;
                     }
 
-                    // Inside/outside corner classification based on path turn + rail offset side.
+                    // Corner classification for seat angle.
                     double turn = CrossZ(prevDir, nextDir);
                     double lateral = 0.5 * (sides[prev].RailLateralMm + sides[next].RailLateralMm);
-                    if (Math.Abs(lateral) < 1e-6)
-                        lateral = sides[prev].RailLateralMm;
-                    if (Math.Abs(lateral) < 1e-6)
-                        lateral = 1.0; // stable fallback
-
+                    if (Math.Abs(lateral) < 1e-6) lateral = sides[prev].RailLateralMm;
+                    if (Math.Abs(lateral) < 1e-6) lateral = 1.0;
                     bool isInside = (turn * lateral) < 0.0;
                     string cornerClass = GetCornerDebugClassByRunDirection(prevDir, nextDir, isInside);
-
-                    // Corner reference from centerline intersection.
-                    Point cornerPt;
-                    if (TryIntersectLines2D(baseEnds[prev], prevDir, baseStarts[next], nextDir, out Point xpt))
-                    {
-                        double z = 0.5 * (ends[prev].Z + starts[next].Z);
-                        cornerPt = new Point(xpt.X, xpt.Y, z);
-                    }
-                    else
-                    {
-                        cornerPt = new Point(
-                            0.5 * (ends[prev].X + starts[next].X),
-                            0.5 * (ends[prev].Y + starts[next].Y),
-                            0.5 * (ends[prev].Z + starts[next].Z));
-                    }
 
                     cornerSeats.Add(new CornerSeatSpec
                     {
@@ -351,6 +368,19 @@ namespace WDRailing
 
                     if (capStart[i]) CreateRailEndCap(starts[i], new Vector(-d.X, -d.Y, -d.Z), halfRailWidthMm);
                     if (capEnd[i]) CreateRailEndCap(ends[i], d, halfRailWidthMm);
+                }
+
+                // Apply end fittings on butt sides.
+                foreach (var fit in fitSpecs)
+                {
+                    if (fit == null) continue;
+                    if (fit.SideIndex < 0 || fit.SideIndex >= n) continue;
+
+                    Beam moving = fit.AtStart ? firstPieceBySide[fit.SideIndex] : lastPieceBySide[fit.SideIndex];
+                    if (moving == null) continue;
+
+                    TryApplyEndFitting(moving, fit.FacePoint, fit.FaceNormal);
+                    TryForceBeamEndToPlane(moving, fit.AtStart, fit.FacePoint, fit.FaceNormal);
                 }
 
                 // Corner seat angle per corner/row (slots only, no pilot holes)
@@ -422,7 +452,7 @@ namespace WDRailing
             }
 
             // INSIDE corners use the side the moving rail is on.
-            // OUTSIDE corners must use the opposite face (fixes one-rail-width long condition on 81-84).
+            // OUTSIDE corners must use the opposite face (fixes one-rail-width overshoot on outside corners).
             int faceSign = isInsideCorner ? sideSign : -sideSign;
             if (faceSign == 0) faceSign = +1;
 
@@ -675,24 +705,14 @@ namespace WDRailing
 
         private static int GetCornerRotationIndex(Vector prevDir, Vector nextDir)
         {
-            // prevDir: previous rail run direction (into corner)
-            // nextDir: next rail run direction (out of corner)
-            // We key primarily from incoming run, but validate as a corner using outgoing.
-
             Dir4 inDir = ToDir4(prevDir);
             Dir4 outDir = ToDir4(nextDir);
 
-            // Orthogonal corner patterns (left/right both supported), grouped by rotation
-            // rot 0: incoming East
             if (inDir == Dir4.East && (outDir == Dir4.North || outDir == Dir4.South)) return 0;
-            // rot 1: incoming North
             if (inDir == Dir4.North && (outDir == Dir4.West || outDir == Dir4.East)) return 1;
-            // rot 2: incoming West
             if (inDir == Dir4.West && (outDir == Dir4.South || outDir == Dir4.North)) return 2;
-            // rot 3: incoming South
             if (inDir == Dir4.South && (outDir == Dir4.East || outDir == Dir4.West)) return 3;
 
-            // Fallback for skewed/non-orthogonal corners:
             return (int)inDir;
         }
 
@@ -782,8 +802,6 @@ namespace WDRailing
             {
                 double hx, hy;
 
-                // Prefer nearest point on host CENTERLINE in XY (beam start/end),
-                // so side detection is stable for inside openings and mixed pick direction.
                 if (TryGetClosestPointOnPartCenterlineXY(host, refPointOnLine, out Point cpt) && cpt != null)
                 {
                     hx = cpt.X;
@@ -814,11 +832,6 @@ namespace WDRailing
             return 0; // MIDDLE/blank
         }
 
-        // Host-aware side resolution:
-        //  - LEFT  => place posts AWAY from host centerline side
-        //  - RIGHT => place posts TOWARD host centerline side
-        //  - MIDDLE=> zero offset unless deck-edge is given; with deck-edge, auto AWAY from host
-        // This removes dependence on clockwise/counterclockwise picking for outside vs inside openings.
         private static int ResolvePostSideSign(
             string lineRef,
             Vector leftUnit,
@@ -827,23 +840,20 @@ namespace WDRailing
             bool hasDeckEdge)
         {
             int lineSign = GetLineRefSign(lineRef);
-            int hostSide = DetermineConnectionSideSign(leftUnit, refPointOnLine, hostForSide); // +1 host on LEFT
+            int hostSide = DetermineConnectionSideSign(leftUnit, refPointOnLine, hostForSide);
 
             if (hostSide != 0)
             {
-                if (lineSign > 0) return -hostSide;   // LEFT = away from host
-                if (lineSign < 0) return +hostSide;   // RIGHT = toward host
+                if (lineSign > 0) return -hostSide;
+                if (lineSign < 0) return +hostSide;
 
                 // MIDDLE
                 return hasDeckEdge ? -hostSide : 0;
             }
 
-            // No host reference available: keep legacy behavior.
             if (lineSign != 0) return lineSign;
             return hasDeckEdge ? +1 : 0;
         }
-
-
 
 
         // ---------------- Post creation ----------------
@@ -869,18 +879,18 @@ namespace WDRailing
 
 
         private void RunOneSegment(
-    Point p1, Point p2,
-    bool skipFirstCornerPost,
-    List<Part> hostParts,
-    double spacingMm, double postHeightMm,
-    double startOffsetMm, double endOffsetMm,
-    double baseOffsetMm, double deckEdgeMm, string lineRef,
-    string profile, string material, string postClass, string postName,
-    bool connEnabled, string connName, string connAttr,
-    bool railEnabled, int railCount,
-    double railStartOffsetMm, double railEndOffsetMm,
-    double railFromTopMm, double railSpacingMm,
-    ref int inserted, ref int failed, ref int connOk, ref int connFail)
+            Point p1, Point p2,
+            bool skipFirstCornerPost,
+            List<Part> hostParts,
+            double spacingMm, double postHeightMm,
+            double startOffsetMm, double endOffsetMm,
+            double baseOffsetMm, double deckEdgeMm, string lineRef,
+            string profile, string material, string postClass, string postName,
+            bool connEnabled, string connName, string connAttr,
+            bool railEnabled, int railCount,
+            double railStartOffsetMm, double railEndOffsetMm,
+            double railFromTopMm, double railSpacingMm,
+            ref int inserted, ref int failed, ref int connOk, ref int connFail)
         {
             Vector run = new Vector(p2.X - p1.X, p2.Y - p1.Y, p2.Z - p1.Z);
             double runLen = Math.Sqrt(run.X * run.X + run.Y * run.Y + run.Z * run.Z);
@@ -890,7 +900,6 @@ namespace WDRailing
             Vector left = GetLeftVectorXY(dir);
             Position.RotationEnum postRotation = GetPostRotationFromRun(dir);
 
-            // Half-width used for face-based offsets (best effort)
             double halfPostWidthMm = 0.0;
             if (TryGetOutsideDimMm(profile, out double outsideMm)) halfPostWidthMm = outsideMm * 0.5;
 
@@ -983,17 +992,15 @@ namespace WDRailing
 
         private static double ComputeLateralOffsetMm(string lineRef, double deckEdgeMm, double halfPostWidthMm)
         {
-            int sideSign = 0; // +1 = LEFT, -1 = RIGHT, 0 = MIDDLE
+            int sideSign = 0;
             if (lineRef == "LEFT") sideSign = +1;
             else if (lineRef == "RIGHT") sideSign = -1;
 
             if (Math.Abs(deckEdgeMm) > 0.0001)
             {
-                // Deck edge uses a side; if user left it at MIDDLE, default to LEFT.
                 if (sideSign == 0) sideSign = +1;
                 return sideSign * (deckEdgeMm + halfPostWidthMm);
             }
-
 
             return sideSign * halfPostWidthMm;
         }
@@ -1010,17 +1017,14 @@ namespace WDRailing
 
         private static Position.RotationEnum GetPostRotationFromRun(Vector dirUnit)
         {
-            // Choose dominant axis in XY
             if (Math.Abs(dirUnit.X) >= Math.Abs(dirUnit.Y))
             {
-                // X-dominant
                 return (dirUnit.X >= 0.0)
                     ? Position.RotationEnum.TOP
                     : Position.RotationEnum.BELOW;
             }
             else
             {
-                // Y-dominant
                 return (dirUnit.Y >= 0.0)
                     ? Position.RotationEnum.BACK
                     : Position.RotationEnum.FRONT;
