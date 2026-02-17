@@ -41,6 +41,7 @@ namespace WDRailing
             if (TryGetOutsideDimMm(railProfile, out var railOutsideMm))
                 halfRailWidthMm = railOutsideMm * 0.5;
 
+
             int sideSign = DetermineConnectionSideSign(leftUnit, startOnLine, anyHostForSide);
             if (sideSign == 0) sideSign = +1;
 
@@ -103,8 +104,18 @@ namespace WDRailing
 
         private sealed class CornerFitSpec
         {
+            // Moving rail endpoint to trim/extend.
             public int SideIndex;
             public bool AtStart;
+
+            // Fixed rail side used as the butt target (for dynamic, row-specific recompute).
+            public int FixedSideIndex;
+            public bool FixedAtStart;
+
+            // Per-corner butt face offset (mm)
+            public double FaceOffsetMm;
+
+            // Precomputed fallback plane (used only if dynamic recompute fails).
             public Point FacePoint;
             public Vector FaceNormal;
         }
@@ -219,6 +230,17 @@ namespace WDRailing
                     Vector prevDir = UnitVector(sides[prev].Dir);
                     Vector nextDir = UnitVector(sides[next].Dir);
 
+                    // Compute class/inside-outside for fit offset
+                    double turnForOffset = CrossZ(prevDir, nextDir);
+                    double lateralForOffset = 0.5 * (sides[prev].RailLateralMm + sides[next].RailLateralMm);
+                    if (Math.Abs(lateralForOffset) < 1e-6) lateralForOffset = sides[prev].RailLateralMm;
+                    if (Math.Abs(lateralForOffset) < 1e-6) lateralForOffset = 1.0;
+
+                    bool isInsideForOffset = (turnForOffset * lateralForOffset) < 0.0;
+                    string cornerClassForOffset = GetCornerDebugClassByRunDirection(prevDir, nextDir, isInsideForOffset);
+                    double cornerButtOffsetMm = GetCornerButtFaceOffsetMm(cornerClassForOffset, halfRailWidthMm);
+
+
                     // Option A: PREV is non-butt (cap at end), NEXT is butt side.
                     bool optPrevCapOk = ComputeButtStartToSideFace(
                         ends[prev],          // fixed side corner point
@@ -226,7 +248,7 @@ namespace WDRailing
                         sides[prev].Left,    // fixed side left
                         starts[next],        // moving butt point
                         nextDir,             // moving butt direction
-                        halfRailWidthMm,
+                        cornerButtOffsetMm,
                         out Point optNextStart,
                         out double moveNextButtMm,
                         out Point optPrevCapFacePoint,
@@ -239,7 +261,7 @@ namespace WDRailing
                         sides[next].Left,    // fixed side left
                         ends[prev],          // moving butt point
                         prevDir,             // moving butt direction
-                        halfRailWidthMm,
+                        cornerButtOffsetMm,
                         out Point optPrevEnd,
                         out double movePrevButtMm,
                         out Point optNextCapFacePoint,
@@ -270,8 +292,18 @@ namespace WDRailing
 
                         fitSpecs.Add(new CornerFitSpec
                         {
+                            // moving side (butt)
                             SideIndex = next,
                             AtStart = true,
+
+                            // fixed side (capped)
+                            FixedSideIndex = prev,
+                            FixedAtStart = false,
+
+                            // <-- ADD THIS
+                            FaceOffsetMm = cornerButtOffsetMm,
+
+                            // fallback plane
                             FacePoint = optPrevCapFacePoint,
                             FaceNormal = optPrevCapFaceNormal
                         });
@@ -284,8 +316,18 @@ namespace WDRailing
 
                         fitSpecs.Add(new CornerFitSpec
                         {
+                            // moving side (butt)
                             SideIndex = prev,
                             AtStart = false,
+
+                            // fixed side (capped)
+                            FixedSideIndex = next,
+                            FixedAtStart = true,
+
+                            // <-- ADD THIS
+                            FaceOffsetMm = cornerButtOffsetMm,
+
+                            // fallback plane
                             FacePoint = optNextCapFacePoint,
                             FaceNormal = optNextCapFaceNormal
                         });
@@ -358,15 +400,51 @@ namespace WDRailing
                     if (capEnd[i]) CreateRailEndCap(ends[i], d, halfRailWidthMm);
                 }
 
-                // Apply end fittings on butt sides so they truly terminate on side-face planes.
+                // Apply end fittings on butt sides so they truly terminate on the actual
+                // fixed-rail side-face plane for this row/corner.
                 foreach (var fit in fitSpecs)
                 {
                     if (fit == null) continue;
                     if (fit.SideIndex < 0 || fit.SideIndex >= n) continue;
+                    if (fit.FixedSideIndex < 0 || fit.FixedSideIndex >= n) continue;
 
-                    Beam target = fit.AtStart ? firstPieceBySide[fit.SideIndex] : lastPieceBySide[fit.SideIndex];
-                    TryApplyEndFitting(target, fit.FacePoint, fit.FaceNormal);
-                    TryForceBeamEndToPlane(target, fit.AtStart, fit.FacePoint, fit.FaceNormal);
+                    Beam moving = fit.AtStart ? firstPieceBySide[fit.SideIndex] : lastPieceBySide[fit.SideIndex];
+                    Beam fixedBeam = fit.FixedAtStart ? firstPieceBySide[fit.FixedSideIndex] : lastPieceBySide[fit.FixedSideIndex];
+                    if (moving == null || fixedBeam == null) continue;
+
+                    Point facePoint = fit.FacePoint;
+                    Vector faceNormal = fit.FaceNormal;
+
+                    // Recompute from the ACTUAL created rail positions so deck-edge or host-driven
+                    // shifts are handled case-by-case.
+                    Point dynAdjusted;
+                    Point dynFacePoint;
+                    Vector dynFaceNormal;
+
+                    double recomputeOffsetMm = Math.Abs(fit.FaceOffsetMm);
+                    if (recomputeOffsetMm < 1e-6)
+                        recomputeOffsetMm = Math.Abs(halfRailWidthMm);
+
+                    if (ComputeButtFaceFromActualRails(
+                        fixedBeam,
+                        fit.FixedAtStart,
+                        moving,
+                        fit.AtStart,
+                        recomputeOffsetMm,
+                        out dynAdjusted,
+                        out dynFacePoint,
+                        out dynFaceNormal))
+                    {
+                        if (fit.AtStart) moving.StartPoint = dynAdjusted;
+                        else moving.EndPoint = dynAdjusted;
+                        moving.Modify();
+
+                        facePoint = dynFacePoint;
+                        faceNormal = dynFaceNormal;
+                    }
+
+                    TryApplyEndFitting(moving, facePoint, faceNormal);
+                    TryForceBeamEndToPlane(moving, fit.AtStart, facePoint, faceNormal);
                 }
 
                 // Corner seat angle per corner/row (slots only, no pilot holes)
@@ -392,7 +470,9 @@ namespace WDRailing
         }
 
 
-        // Finds where a moving rail point should be so it butts to the side face of a fixed rail.
+        // Finds where a moving rail point should be so it butts to a side plane of a fixed rail.
+        // Note: caller controls the plane offset distance (half-width, full-width, etc.)
+        // using the halfRailWidthMm argument value.
         // Returns adjusted point + signed move distance along movingDir + chosen face plane data.
         private static bool ComputeButtStartToSideFace(
             Point fixedCornerPoint,
@@ -459,10 +539,14 @@ namespace WDRailing
                 Vector n = new Vector(left.X * sgn, left.Y * sgn, 0.0);
                 n = UnitVector(n);
 
+                double offsetMm = Math.Abs(halfRailWidthMm);
+                double penaltyScale = Math.Max(offsetMm, 1.0);
+
                 Point q = new Point(
-                    fixedCornerPoint.X + n.X * halfRailWidthMm,
-                    fixedCornerPoint.Y + n.Y * halfRailWidthMm,
+                    fixedCornerPoint.X + n.X * offsetMm,
+                    fixedCornerPoint.Y + n.Y * offsetMm,
                     fixedCornerPoint.Z);
+
 
                 double denom = Dot2D(n, dMove);
                 if (Math.Abs(denom) < 1e-9) continue;
@@ -477,21 +561,18 @@ namespace WDRailing
 
                 double cornerDist = Distance3D(cand, fixedCornerPoint);
 
-                double wrongSidePenalty = (preferredSign != 0 && sgn != preferredSign)
-                    ? (halfRailWidthMm * 8.0)
-                    : 0.0;
-
-                double wrongDirectionPenalty = 0.0;
-                if (desiredMoveSign != 0 && Math.Sign(t) != 0 && Math.Sign(t) != desiredMoveSign)
-                    wrongDirectionPenalty = halfRailWidthMm * 4.0;
-
-                double score = wrongSidePenalty + wrongDirectionPenalty + Math.Abs(t) + (cornerDist * 1e-3);
-
                 // Orient fitting normal toward the butt rail side for more consistent trims.
                 Vector nFit = n;
                 Vector toCand = new Vector(cand.X - q.X, cand.Y - q.Y, 0.0);
                 if (Dot2D(nFit, toCand) < 0.0)
                     nFit = new Vector(-nFit.X, -nFit.Y, -nFit.Z);
+
+                double wrongDirectionPenalty = 0.0;
+                if (desiredMoveSign != 0 && Math.Sign(t) != 0 && Math.Sign(t) != desiredMoveSign)
+                    wrongDirectionPenalty = penaltyScale * 4.0;
+
+                // IMPORTANT: no wrongSidePenalty here
+                double score = Math.Abs(t) + wrongDirectionPenalty + (cornerDist * 1e-3);
 
                 if (score < bestScore)
                 {
@@ -512,6 +593,150 @@ namespace WDRailing
             chosenFacePoint = bestFacePoint;
             chosenFaceNormal = bestFaceNormal;
             return true;
+        }
+
+        // Recomputes butt target plane from the ACTUAL created beams (not just picked points),
+        // so per-side deck-edge/host offsets are handled row-by-row.
+        private static bool ComputeButtFaceFromActualRails(
+            Beam fixedBeam,
+            bool fixedAtStart,
+            Beam movingBeam,
+            bool movingAtStart,
+            double faceOffsetMm,
+            out Point adjustedMovingPoint,
+            out Point facePoint,
+            out Vector faceNormal)
+        {
+            adjustedMovingPoint = null;
+            facePoint = null;
+            faceNormal = null;
+
+            try
+            {
+                if (fixedBeam == null || movingBeam == null) return false;
+
+                Point fixedCorner = fixedAtStart ? fixedBeam.StartPoint : fixedBeam.EndPoint;
+                Point fixedOther = fixedAtStart ? fixedBeam.EndPoint : fixedBeam.StartPoint;
+
+                Point movingCorner = movingAtStart ? movingBeam.StartPoint : movingBeam.EndPoint;
+                Point movingOther = movingAtStart ? movingBeam.EndPoint : movingBeam.StartPoint;
+
+                Vector fixedDir = UnitVector(new Vector(
+                    fixedOther.X - fixedCorner.X,
+                    fixedOther.Y - fixedCorner.Y,
+                    fixedOther.Z - fixedCorner.Z));
+
+                Vector movingDir = UnitVector(new Vector(
+                    movingOther.X - movingCorner.X,
+                    movingOther.Y - movingCorner.Y,
+                    movingOther.Z - movingCorner.Z));
+
+                if (LengthXY(fixedDir) < 1e-9 || LengthXY(movingDir) < 1e-9)
+                    return false;
+
+                Vector left = GetLeftVectorXY(fixedDir);
+                if (LengthXY(left) < 1e-9)
+                    return false;
+
+                double penaltyScale = Math.Max(Math.Abs(faceOffsetMm), 1.0); // 1 mm minimum stability
+
+                bool found = false;
+                double bestScore = double.MaxValue;
+                Point bestPoint = movingCorner;
+                Point bestFacePoint = movingCorner;
+                Vector bestFaceNormal = left;
+
+                // Prefer the side where the moving rail currently sits.
+                int preferredSign = 0;
+                {
+                    Vector fromFixed = new Vector(
+                        movingCorner.X - fixedCorner.X,
+                        movingCorner.Y - fixedCorner.Y,
+                        0.0);
+                    double side = Dot2D(left, fromFixed);
+                    if (Math.Abs(side) > 1e-6)
+                        preferredSign = (side >= 0.0) ? +1 : -1;
+                }
+
+                if (preferredSign == 0)
+                {
+                    double turn = CrossZ(new Vector(fixedDir.X, fixedDir.Y, 0.0), new Vector(movingDir.X, movingDir.Y, 0.0));
+                    if (Math.Abs(turn) > 1e-6)
+                        preferredSign = (turn >= 0.0) ? +1 : -1;
+                }
+
+                int[] signs = (preferredSign == 0)
+                    ? new[] { +1, -1 }
+                    : new[] { preferredSign, -preferredSign };
+
+                Vector toCorner = new Vector(
+                    fixedCorner.X - movingCorner.X,
+                    fixedCorner.Y - movingCorner.Y,
+                    0.0);
+                int desiredMoveSign = 0;
+                double toward = Dot2D(new Vector(movingDir.X, movingDir.Y, 0.0), toCorner);
+                if (Math.Abs(toward) > 1e-6)
+                    desiredMoveSign = (toward >= 0.0) ? +1 : -1;
+
+                foreach (int sgn in signs)
+                {
+                    Vector n = UnitVector(new Vector(left.X * sgn, left.Y * sgn, 0.0));
+
+                    Point q = new Point(
+                        fixedCorner.X + n.X * faceOffsetMm,
+                        fixedCorner.Y + n.Y * faceOffsetMm,
+                        movingCorner.Z);
+
+                    double denom = Dot2D(n, movingDir);
+                    if (Math.Abs(denom) < 1e-9) continue;
+
+                    double num = (q.X - movingCorner.X) * n.X + (q.Y - movingCorner.Y) * n.Y;
+                    double t = num / denom;
+
+                    Point cand = new Point(
+                        movingCorner.X + movingDir.X * t,
+                        movingCorner.Y + movingDir.Y * t,
+                        movingCorner.Z + movingDir.Z * t);
+
+                    double cornerDist = Distance3D(cand, fixedCorner);
+
+                    double wrongSidePenalty = (preferredSign != 0 && sgn != preferredSign)
+                        ? (penaltyScale * 8.0)
+                        : 0.0; ;
+
+                    double wrongDirectionPenalty = 0.0;
+                    if (desiredMoveSign != 0 && Math.Sign(t) != 0 && Math.Sign(t) != desiredMoveSign)
+                        wrongDirectionPenalty = penaltyScale * 4.0;
+
+                    double score = wrongSidePenalty + wrongDirectionPenalty + Math.Abs(t) + (cornerDist * 1e-3);
+
+                    Vector nFit = n;
+                    Vector toCand = new Vector(cand.X - q.X, cand.Y - q.Y, 0.0);
+                    if (Dot2D(nFit, toCand) < 0.0)
+                        nFit = new Vector(-nFit.X, -nFit.Y, -nFit.Z);
+
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        bestPoint = cand;
+                        bestFacePoint = new Point(q.X, q.Y, cand.Z);
+                        bestFaceNormal = nFit;
+                        found = true;
+                    }
+                }
+
+                if (!found)
+                    return false;
+
+                adjustedMovingPoint = bestPoint;
+                facePoint = bestFacePoint;
+                faceNormal = bestFaceNormal;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool TryIntersectLines2D(Point p, Vector dp, Point q, Vector dq, out Point intersection)
@@ -1028,6 +1253,14 @@ namespace WDRailing
 
 
         // ---------------- Lateral offset helpers ----------------
+
+        private static double GetCornerButtFaceOffsetMm(string cornerClass, double halfRailWidthMm)
+        {
+            // Always a POSITIVE distance from centerline to a side face.
+            // Which side (+/-) is chosen in ComputeButt... by testing both.
+            return Math.Abs(halfRailWidthMm);
+        }
+
 
 
         private static double ComputeLateralOffsetMm(string lineRef, double deckEdgeMm, double halfPostWidthMm)
