@@ -994,6 +994,7 @@ namespace WDRailing
                 return sideSign * (deckEdgeMm + halfPostWidthMm);
             }
 
+
             return sideSign * halfPostWidthMm;
         }
 
