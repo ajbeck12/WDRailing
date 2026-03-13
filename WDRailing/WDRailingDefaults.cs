@@ -55,6 +55,15 @@ namespace WDRailing
         public string SeatPilotStandard { get; private set; }
         public string SeatPilotCutLengthIn { get; private set; }
 
+        public string StartLoopEnabled { get; set; } = "0";
+        public string EndLoopEnabled { get; set; } = "0";
+        public string StartLoopRows { get; set; } = "ALL";
+        public string EndLoopRows { get; set; } = "ALL";
+        public string SpacingMode { get; private set; }
+        public string ConnFlipPosts { get; private set; }
+        public string StartPostEnabled { get; private set; }
+        public string EndPostEnabled { get; private set; }
+
         public static string GetConfigPath()
         {
             string dllPath = Assembly.GetExecutingAssembly().Location;
@@ -109,6 +118,15 @@ namespace WDRailing
                 SeatPilotDiaIn = Require(kv, "SeatPilotDiaIn"),
                 SeatPilotStandard = Require(kv, "SeatPilotStandard"),
                 SeatPilotCutLengthIn = Require(kv, "SeatPilotCutLengthIn"),
+
+                StartLoopEnabled = GetOrDefault(kv, "StartLoopEnabled", "0"),
+                EndLoopEnabled = GetOrDefault(kv, "EndLoopEnabled", "0"),
+
+                ConnFlipPosts = GetOrDefault(kv, "ConnFlipPosts", ""),
+                SpacingMode = GetOrDefault(kv, "SpacingMode", "AUTOMATIC"),
+                StartPostEnabled = GetOrDefault(kv, "StartPostEnabled", "1"),
+                EndPostEnabled = GetOrDefault(kv, "EndPostEnabled", "1"),
+
             };
 
             string lr = d.LineRef.Trim().ToUpperInvariant();
@@ -119,6 +137,9 @@ namespace WDRailing
             d.CreateConnection = Normalize01(d.CreateConnection, "CreateConnection");
             d.RailEnabled = Normalize01(d.RailEnabled, "RailEnabled");
             d.SeatSlotSpecial1 = Normalize01(d.SeatSlotSpecial1, "SeatSlotSpecial1");
+
+            d.StartLoopEnabled = Normalize01(d.StartLoopEnabled, "StartLoopEnabled");
+            d.EndLoopEnabled = Normalize01(d.EndLoopEnabled, "EndLoopEnabled");
 
             return d;
         }
@@ -191,6 +212,13 @@ namespace WDRailing
                     return v.Trim(); // may be empty
             }
             throw new InvalidDataException("Missing required config key. Expected one of: " + string.Join(", ", keys));
+        }
+
+        private static string GetOrDefault(Dictionary<string, string> kv, string key, string defaultValue)
+        {
+            if (kv.TryGetValue(key, out string v) && !string.IsNullOrWhiteSpace(v))
+                return v.Trim();
+            return defaultValue;
         }
 
         private WDRailingDefaults() { }

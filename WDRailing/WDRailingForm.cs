@@ -38,6 +38,13 @@ namespace WDRailing
 
         private TextBox _bfRunPts1, _bfRunPts2, _bfRunPts3, _bfRunPts4;
 
+        private ComboBox _cbStartLoopEnabled, _cbEndLoopEnabled;
+
+        private TextBox _tbConnFlipPosts;
+        private ComboBox _cbSpacingMode;
+        private ComboBox _cbStartPostEnabled;
+        private ComboBox _cbEndPostEnabled;
+
         public WDRailingDialog()
         {
             BuildUi();
@@ -78,9 +85,18 @@ namespace WDRailing
 
             // ---------------- Create controls + bind ----------------
 
+            _cbSpacingMode = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cbSpacingMode.Items.AddRange(new object[] { "AUTOMATIC", "EXACT START", "EXACT END", "MAX" });
+            BindString(_cbSpacingMode, "SPACING_MODE", "SelectedItem");
             _tbSpacingIn = NewText(); BindString(_tbSpacingIn, "SPACING_IN");
             _tbPostHeightIn = NewText(); BindString(_tbPostHeightIn, "POST_HEIGHT_IN");
+            _cbStartPostEnabled = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cbStartPostEnabled.Items.AddRange(new object[] { "0", "1" });
+            BindString(_cbStartPostEnabled, "START_POST_ENABLED", "SelectedItem");
             _tbStartOffsetIn = NewText(); BindString(_tbStartOffsetIn, "START_OFFSET_IN");
+            _cbEndPostEnabled = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cbEndPostEnabled.Items.AddRange(new object[] { "0", "1" });
+            BindString(_cbEndPostEnabled, "END_POST_ENABLED", "SelectedItem");
             _tbEndOffsetIn = NewText(); BindString(_tbEndOffsetIn, "END_OFFSET_IN");
             _tbBaseOffsetIn = NewText(); BindString(_tbBaseOffsetIn, "BASE_OFFSET_IN");
 
@@ -101,6 +117,9 @@ namespace WDRailing
 
             _tbConnName = NewText(); BindString(_tbConnName, "CONN_NAME");
             _tbConnAttr = NewText(); BindString(_tbConnAttr, "CONN_ATTR");
+
+            _tbConnFlipPosts = NewText();
+            BindString(_tbConnFlipPosts, "CONN_FLIP_POSTS");
 
             _cbRailEnabled = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
             _cbRailEnabled.Items.AddRange(new object[] { "0", "1" });
@@ -127,6 +146,14 @@ namespace WDRailing
             _tbSeatPilotDiaIn = NewText(); BindString(_tbSeatPilotDiaIn, "SEAT_PILOT_DIA_IN");
             _tbSeatPilotStandard = NewText(); BindString(_tbSeatPilotStandard, "SEAT_PILOT_STANDARD");
             _tbSeatPilotCutLenIn = NewText(); BindString(_tbSeatPilotCutLenIn, "SEAT_PILOT_CUTLEN_IN");
+
+            _cbStartLoopEnabled = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cbStartLoopEnabled.Items.AddRange(new object[] { "0", "1" });
+            BindString(_cbStartLoopEnabled, "START_LOOP_ENABLED", "SelectedItem");
+
+            _cbEndLoopEnabled = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cbEndLoopEnabled.Items.AddRange(new object[] { "0", "1" });
+            BindString(_cbEndLoopEnabled, "END_LOOP_ENABLED", "SelectedItem");
 
             // ---------------- Formatting hooks ----------------
 
@@ -158,10 +185,13 @@ namespace WDRailing
             {
                 var tab = NewTab("General", out var table);
                 int r = 0;
-                AddRow(table, r++, "Target spacing", _tbSpacingIn);
+                AddRow(table, r++, "Spacing mode", _cbSpacingMode);
+                AddRow(table, r++, "Spacing / pattern", _tbSpacingIn);
                 AddRow(table, r++, "Post height", _tbPostHeightIn);
                 AddRow(table, r++, "Start offset", _tbStartOffsetIn);
                 AddRow(table, r++, "End offset", _tbEndOffsetIn);
+                AddRow(table, r++, "Start post enabled (0/1)", _cbStartPostEnabled);
+                AddRow(table, r++, "End post enabled (0/1)", _cbEndPostEnabled);
                 AddRow(table, r++, "Base offset (can be negative)", _tbBaseOffsetIn);
                 tabs.TabPages.Add(tab);
             }
@@ -193,6 +223,7 @@ namespace WDRailing
                 AddRow(table, r++, "Create connection (0/1)", _cbConnEnabled);
                 AddRow(table, r++, "Connection name or number", _tbConnName);
                 AddRow(table, r++, "Connection attributes file (optional)", _tbConnAttr);
+                AddRow(table, r++, "Flip CS on post numbers", _tbConnFlipPosts);
                 tabs.TabPages.Add(tab);
             }
 
@@ -206,6 +237,10 @@ namespace WDRailing
                 AddRow(table, r++, "Rail center down from top of post", _tbRailFromTopIn);
                 AddRow(table, r++, "Rail count", _tbRailCount);
                 AddRow(table, r++, "Rail spacing (c/c)", _tbRailSpacingIn);
+
+                AddRow(table, r++, "Start end loop (0/1)", _cbStartLoopEnabled);
+                AddRow(table, r++, "End end loop (0/1)", _cbEndLoopEnabled);
+
                 tabs.TabPages.Add(tab);
             }
 
@@ -248,7 +283,13 @@ namespace WDRailing
             BindString(_bfRunPts4, "RUNPTS4");
 
             var hiddenPanel = new Panel { Visible = false, Width = 1, Height = 1 };
-            hiddenPanel.Controls.AddRange(new Control[] { _bfRunPts1, _bfRunPts2, _bfRunPts3, _bfRunPts4 });
+            hiddenPanel.Controls.AddRange(new Control[]
+            {
+    _bfP1X, _bfP1Y, _bfP1Z,
+    _bfP2X, _bfP2Y, _bfP2Z,
+    _bfHostIds1, _bfHostIds2, _bfHostIds3, _bfHostIds4,
+    _bfRunPts1, _bfRunPts2, _bfRunPts3, _bfRunPts4
+            });
 
             // ---------------- Compose ----------------
 
@@ -305,6 +346,7 @@ namespace WDRailing
             SetIfEmpty(_tbConnName, _cfg.ConnectionName);
             if (_tbConnAttr.Text == null) _tbConnAttr.Text = "";
             if (string.IsNullOrWhiteSpace(_tbConnAttr.Text) && _cfg.ConnectionAttr != null) _tbConnAttr.Text = _cfg.ConnectionAttr;
+            SetIfEmpty(_tbConnFlipPosts, _cfg.ConnFlipPosts);
 
             if ((_cbRailEnabled.SelectedItem == null && string.IsNullOrWhiteSpace(_cbRailEnabled.Text)) && !string.IsNullOrWhiteSpace(_cfg.RailEnabled))
                 _cbRailEnabled.SelectedItem = _cfg.RailEnabled.Trim();
@@ -323,11 +365,27 @@ namespace WDRailing
             SetIfEmpty(_tbSeatSlotCutLenIn, _cfg.SeatSlotCutLengthIn);
             if ((_cbSeatSlotSpecial1.SelectedItem == null && string.IsNullOrWhiteSpace(_cbSeatSlotSpecial1.Text)) && !string.IsNullOrWhiteSpace(_cfg.SeatSlotSpecial1))
                 _cbSeatSlotSpecial1.Text = _cfg.SeatSlotSpecial1.Trim();
-
             SetIfEmpty(_tbSeatPilotC2CIn, _cfg.SeatPilotC2CIn);
             SetIfEmpty(_tbSeatPilotDiaIn, _cfg.SeatPilotDiaIn);
             SetIfEmpty(_tbSeatPilotStandard, _cfg.SeatPilotStandard);
             SetIfEmpty(_tbSeatPilotCutLenIn, _cfg.SeatPilotCutLengthIn);
+
+            if ((_cbStartLoopEnabled.SelectedItem == null && string.IsNullOrWhiteSpace(_cbStartLoopEnabled.Text)) &&
+    !string.IsNullOrWhiteSpace(_cfg.StartLoopEnabled))
+                _cbStartLoopEnabled.SelectedItem = _cfg.StartLoopEnabled.Trim();
+
+            if ((_cbEndLoopEnabled.SelectedItem == null && string.IsNullOrWhiteSpace(_cbEndLoopEnabled.Text)) &&
+                !string.IsNullOrWhiteSpace(_cfg.EndLoopEnabled))
+                _cbEndLoopEnabled.SelectedItem = _cfg.EndLoopEnabled.Trim();
+
+            if ((_cbSpacingMode.SelectedItem == null && string.IsNullOrWhiteSpace(_cbSpacingMode.Text)) && !string.IsNullOrWhiteSpace(_cfg.SpacingMode))
+                _cbSpacingMode.SelectedItem = _cfg.SpacingMode.Trim().ToUpperInvariant();
+
+            if ((_cbStartPostEnabled.SelectedItem == null && string.IsNullOrWhiteSpace(_cbStartPostEnabled.Text)) && !string.IsNullOrWhiteSpace(_cfg.StartPostEnabled))
+                _cbStartPostEnabled.SelectedItem = _cfg.StartPostEnabled.Trim();
+
+            if ((_cbEndPostEnabled.SelectedItem == null && string.IsNullOrWhiteSpace(_cbEndPostEnabled.Text)) && !string.IsNullOrWhiteSpace(_cfg.EndPostEnabled))
+                _cbEndPostEnabled.SelectedItem = _cfg.EndPostEnabled.Trim();
         }
 
         private void FormatAllDistances()

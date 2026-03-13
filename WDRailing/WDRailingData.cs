@@ -23,6 +23,10 @@ namespace WDRailing
         [StructuresField("START_OFFSET_IN")] public string StartOffsetIn;
         [StructuresField("END_OFFSET_IN")] public string EndOffsetIn;
         [StructuresField("BASE_OFFSET_IN")] public string BaseOffsetIn;
+        [StructuresField("START_POST_ENABLED")]
+        public string StartPostEnabled;
+        [StructuresField("END_POST_ENABLED")]
+        public string EndPostEnabled;
 
         [StructuresField("LINE_REF")] public string LineRef;
         [StructuresField("DECK_EDGE_IN")] public string DeckEdgeIn;
@@ -77,6 +81,18 @@ namespace WDRailing
         [StructuresField("RUNPTS2")] public string RunPts2;
         [StructuresField("RUNPTS3")] public string RunPts3;
         [StructuresField("RUNPTS4")] public string RunPts4;
+
+        [StructuresField("START_LOOP_ENABLED")]
+        public string StartLoopEnabled;
+
+        [StructuresField("END_LOOP_ENABLED")]
+        public string EndLoopEnabled;
+
+        [StructuresField("CONN_FLIP_POSTS")]
+        public string ConnFlipPosts;
+
+        [StructuresField("SPACING_MODE")]
+        public string SpacingMode;
 
     }
 }

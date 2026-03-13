@@ -425,23 +425,25 @@ namespace WDRailing
         // ---------------- Corner seat angle (slots only, no pilot holes) ----------------
 
         private static Beam CreateCornerSeatAngleSlotsOnly(
-            Point cornerRailPoint,
-            Vector prevDirUnit,
-            Vector nextDirUnit,
-            bool isInsideCorner,
-            double railCenterZmm,
-            double halfRailDepthMm,
-            double holeLineFromBendIn,
-            double slotC2CIn,
-            double slotSizeIn,
-            string slotStandard,
-            double slotCutLengthIn,
-            bool slotSpecialFirstLayer,
-            string cornerDebugClass = null)
+    Point cornerRailPoint,
+    Vector prevDirUnit,
+    Vector nextDirUnit,
+    bool isInsideCorner,
+    double railCenterZmm,
+    double halfRailDepthMm,
+    double holeLineFromBendIn,
+    double slotC2CIn,
+    double slotSizeIn,
+    string slotStandard,
+    double slotCutLengthIn,
+    bool slotSpecialFirstLayer,
+    string cornerDebugClass = null)
         {
             try
             {
                 if (cornerRailPoint == null) return null;
+
+                string logicCornerClass = string.IsNullOrWhiteSpace(cornerDebugClass) ? null : cornerDebugClass;
 
                 Vector prevXY = GetDirXYUnit(prevDirUnit);
                 Vector nextXY = GetDirXYUnit(nextDirUnit);
@@ -455,7 +457,6 @@ namespace WDRailing
                 double insideBisLen = Math.Sqrt(insideBis.X * insideBis.X + insideBis.Y * insideBis.Y);
                 if (insideBisLen < 1e-9)
                 {
-                    // Near 180° fallback.
                     insideBis = new Vector(-prevXY.Y, prevXY.X, 0.0);
                     insideBisLen = Math.Sqrt(insideBis.X * insideBis.X + insideBis.Y * insideBis.Y);
                 }
@@ -484,14 +485,6 @@ namespace WDRailing
                     cornerRailPoint.Y + outsideBis.Y * cornerRadiusMm,
                     railCenterZmm);
 
-                // Requested behavior:
-                //  - outside corners: 1 tube-width in X & Y away from outside corner.
-                //  - inside corners: 3/8" inset from inside corner.
-                //
-                // In practice the inside-corner handles were ending up ~1/4" too deep.
-                // Apply a small outward correction so the handles sit on the intended corner.
-                // For arbitrary corner angle, 1 tube-width in each leg maps to travel
-                // of tubeWidth/sin(phi/2) along the bisector.
                 double tubeWidthMm = 2.0 * halfRailDepthMm;
                 double outsideTravelMm = tubeWidthMm / s;
                 double insideInsetMm = InchesToMm(0.375);
@@ -499,10 +492,6 @@ namespace WDRailing
                 double effectiveInsideInsetMm = Math.Max(0.0, insideInsetMm - insideOutCorrectionMm);
 
                 Vector slotAxisDir;
-
-                // Corner-seat-only vertical alignment:
-                // move corner seats up so top of angle aligns to top of rail.
-                // This does NOT affect regular post support seats.
                 double zSeat = railCenterZmm;
                 Point c;
 
@@ -525,9 +514,7 @@ namespace WDRailing
                     slotAxisDir = new Vector(insideBis.X, insideBis.Y, 0.0);
                 }
 
-                // User-calibrated inside-class handle nudge:
-                // 85/86/87/88 -> move 1/8" diagonally toward inside corner
-                if (isInsideCorner && NeedsInsideCornerDiagonalNudge(cornerDebugClass))
+                if (isInsideCorner && NeedsInsideCornerDiagonalNudge(logicCornerClass))
                 {
                     double nudgeMm = InchesToMm(0.125);
                     c = new Point(
@@ -536,7 +523,6 @@ namespace WDRailing
                         c.Z);
                 }
 
-                // Keep handles up/down so the angle stays on its side.
                 double L = GetSeatAngleLengthMm();
                 Point a = new Point(c.X, c.Y, c.Z - (L * 0.5));
                 Point b = new Point(c.X, c.Y, c.Z + (L * 0.5));
@@ -545,10 +531,10 @@ namespace WDRailing
                 seat.Name = SEAT_ANGLE_NAME;
                 seat.Profile.ProfileString = SEAT_ANGLE_PROFILE;
                 seat.Material.MaterialString = SEAT_ANGLE_MATERIAL;
-                seat.Class = string.IsNullOrWhiteSpace(cornerDebugClass) ? SEAT_ANGLE_CLASS : cornerDebugClass;
 
-                // Corner orientation is scenario-dependent.
-                // We resolve it from leg directions so the result is not fixed to one orientation.
+                // Always actual class 6
+                seat.Class = SEAT_ANGLE_CLASS;
+
                 ResolveCornerSeatOrientation(
                     legA,
                     legB,
@@ -559,17 +545,15 @@ namespace WDRailing
                     out Position.RotationEnum rotation,
                     out Position.DepthEnum depth);
 
-                ApplyCornerClassOverrides(cornerDebugClass, ref plane, ref rotation, ref depth);
+                ApplyCornerClassOverrides(logicCornerClass, ref plane, ref rotation, ref depth);
 
-                seat.Position.Plane = plane;         // LEFT/RIGHT
-                seat.Position.Rotation = rotation;   // TOP/BELOW
-                seat.Position.Depth = depth;         // FRONT/BEHIND
+                seat.Position.Plane = plane;
+                seat.Position.Rotation = rotation;
+                seat.Position.Depth = depth;
 
                 if (!seat.Insert())
                     return null;
 
-                // Re-apply orientation after insert so stale/default values cannot persist.
-                // This makes class-based overrides deterministic in-model.
                 seat.Position.Plane = plane;
                 seat.Position.Rotation = rotation;
                 seat.Position.Depth = depth;
@@ -584,7 +568,7 @@ namespace WDRailing
                     slotStandard,
                     slotCutLengthIn,
                     slotSpecialFirstLayer,
-                    cornerDebugClass);
+                    logicCornerClass);
 
                 return seat;
             }
@@ -816,22 +800,22 @@ namespace WDRailing
 
 
         private static void TryAddCornerSlotsOnly(
-
-            Beam seat,
-            Vector slotAxisDir,
-            double holeLineFromBendIn,
-            double slotC2CIn,
-            double slotSizeIn,
-            string slotStandard,
-            double slotCutLengthIn,
-            bool slotSpecialFirstLayer,
-            string cornerDebugClass = null)
+    Beam seat,
+    Vector slotAxisDir,
+    double holeLineFromBendIn,
+    double slotC2CIn,
+    double slotSizeIn,
+    string slotStandard,
+    double slotCutLengthIn,
+    bool slotSpecialFirstLayer,
+    string cornerDebugClass = null)
         {
             if (seat == null) return;
 
-            // Per-corner class slot rotation overrides from field validation.
+            string logicCornerClass = string.IsNullOrWhiteSpace(cornerDebugClass) ? null : cornerDebugClass;
+
             ResolveCornerSlotOverrides(
-                string.IsNullOrWhiteSpace(cornerDebugClass) ? seat.Class : cornerDebugClass,
+                logicCornerClass,
                 out Position.RotationEnum leg1Rotation,
                 out Position.RotationEnum leg2Rotation,
                 out Position.DepthEnum slotDepth);

@@ -1,11 +1,11 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Data;
 using System.Globalization;
 using System.IO;
-using System.Text.RegularExpressions;
 using System.Reflection;
-
+using System.Text.RegularExpressions;
 using Tekla.Structures;
 using Tekla.Structures.Geometry3d;
 using Tekla.Structures.Model;
@@ -67,6 +67,10 @@ namespace WDRailing
             if (string.IsNullOrWhiteSpace(_data.SeatPilotDiaIn)) _data.SeatPilotDiaIn = cfg.SeatPilotDiaIn;
             if (string.IsNullOrWhiteSpace(_data.SeatPilotStandard)) _data.SeatPilotStandard = cfg.SeatPilotStandard;
             if (string.IsNullOrWhiteSpace(_data.SeatPilotCutLengthIn)) _data.SeatPilotCutLengthIn = cfg.SeatPilotCutLengthIn;
+
+            if (string.IsNullOrWhiteSpace(_data.StartLoopEnabled)) _data.StartLoopEnabled = cfg.StartLoopEnabled;
+            if (string.IsNullOrWhiteSpace(_data.EndLoopEnabled)) _data.EndLoopEnabled = cfg.EndLoopEnabled;
+            if (_data.ConnFlipPosts == null) _data.ConnFlipPosts = cfg.ConnFlipPosts ?? "";
 
         }
 
@@ -204,10 +208,35 @@ namespace WDRailing
                 }
 
                 // ===================== Effective values (instance or config) =====================
-                double spacingIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.SpacingIn) ? cfg.SpacingIn : _data.SpacingIn, allowNegative: false);
+                string spacingModeRaw = (string.IsNullOrWhiteSpace(_data.SpacingMode) ? cfg.SpacingMode : _data.SpacingMode).Trim().ToUpperInvariant();
+                if (spacingModeRaw != "AUTOMATIC" && spacingModeRaw != "EXACT START" && spacingModeRaw != "EXACT END" && spacingModeRaw != "MAX")
+                    throw new InvalidDataException("SPACING_MODE must be AUTOMATIC, EXACT START, EXACT END, or MAX. Got: " + spacingModeRaw);
+
+                string spacingRaw = (string.IsNullOrWhiteSpace(_data.SpacingIn) ? cfg.SpacingIn : _data.SpacingIn).Trim();
+
+                double spacingIn = 0.0;
+                List<List<double>> spacingPatternBySegmentIn = null;
+
+                if (spacingModeRaw == "AUTOMATIC" || spacingModeRaw == "MAX")
+                {
+                    spacingIn = ParseImperialInchesOrThrow(spacingRaw, allowNegative: false);
+                }
+                else
+                {
+                    spacingPatternBySegmentIn = ParseSegmentedSpacingPatternOrThrow(spacingRaw, allowNegative: false);
+                }
+
+                _data.SpacingMode = spacingModeRaw;
+                _data.SpacingIn = spacingRaw;
+
                 double heightIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.PostHeightIn) ? cfg.PostHeightIn : _data.PostHeightIn, allowNegative: false);
-                double startIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.StartOffsetIn) ? cfg.StartOffsetIn : _data.StartOffsetIn, allowNegative: true);
-                double endIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.EndOffsetIn) ? cfg.EndOffsetIn : _data.EndOffsetIn, allowNegative: true);
+                List<double> startOffsetsIn = ParseImperialDistanceListOrThrow(
+                    string.IsNullOrWhiteSpace(_data.StartOffsetIn) ? cfg.StartOffsetIn : _data.StartOffsetIn,
+                    allowNegative: true);
+
+                List<double> endOffsetsIn = ParseImperialDistanceListOrThrow(
+                    string.IsNullOrWhiteSpace(_data.EndOffsetIn) ? cfg.EndOffsetIn : _data.EndOffsetIn,
+                    allowNegative: true);
                 double baseIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.BaseOffsetIn) ? cfg.BaseOffsetIn : _data.BaseOffsetIn, allowNegative: true);
                 double deckEdgeIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.DeckEdgeIn) ? cfg.DeckEdgeIn : _data.DeckEdgeIn, allowNegative: true);
 
@@ -231,6 +260,10 @@ namespace WDRailing
                     throw new InvalidDataException("ConnectionName cannot be blank when CreateConnection=1.");
 
                 string connAttr = (string.IsNullOrWhiteSpace(_data.ConnAttr) ? (cfg.ConnectionAttr ?? "") : _data.ConnAttr).Trim();
+
+                string connFlipPostsRaw = (_data.ConnFlipPosts ?? cfg.ConnFlipPosts ?? "").Trim();
+                HashSet<int> connFlipPosts = ParsePositiveIndexSet(connFlipPostsRaw);
+                _data.ConnFlipPosts = NormalizePositiveIndexSet(connFlipPosts);
 
                 // Rails
                 string railEnabledRaw = (string.IsNullOrWhiteSpace(_data.RailEnabled) ? cfg.RailEnabled : _data.RailEnabled).Trim();
@@ -296,11 +329,43 @@ namespace WDRailing
                     string.IsNullOrWhiteSpace(_data.SeatPilotCutLengthIn) ? cfg.SeatPilotCutLengthIn : _data.SeatPilotCutLengthIn,
                     allowNegative: false);
 
+                string startLoopEnabledRaw = (string.IsNullOrWhiteSpace(_data.StartLoopEnabled) ? cfg.StartLoopEnabled : _data.StartLoopEnabled).Trim();
+                if (startLoopEnabledRaw != "0" && startLoopEnabledRaw != "1")
+                    throw new InvalidDataException("START_LOOP_ENABLED must be 0 or 1. Got: " + startLoopEnabledRaw);
+                bool startLoopEnabled = (startLoopEnabledRaw == "1");
+
+                string endLoopEnabledRaw = (string.IsNullOrWhiteSpace(_data.EndLoopEnabled) ? cfg.EndLoopEnabled : _data.EndLoopEnabled).Trim();
+                if (endLoopEnabledRaw != "0" && endLoopEnabledRaw != "1")
+                    throw new InvalidDataException("END_LOOP_ENABLED must be 0 or 1. Got: " + endLoopEnabledRaw);
+                bool endLoopEnabled = (endLoopEnabledRaw == "1");
+
+                _data.StartLoopEnabled = startLoopEnabledRaw;
+                _data.EndLoopEnabled = endLoopEnabledRaw;
+
+                bool[] startLoopMask = BuildAllRowsMask(railCount, startLoopEnabled);
+                bool[] endLoopMask = BuildAllRowsMask(railCount, endLoopEnabled);
+
+                string startPostEnabledRaw = (string.IsNullOrWhiteSpace(_data.StartPostEnabled) ? cfg.StartPostEnabled : _data.StartPostEnabled).Trim();
+                if (startPostEnabledRaw != "0" && startPostEnabledRaw != "1")
+                    throw new InvalidDataException("START_POST_ENABLED must be 0 or 1. Got: " + startPostEnabledRaw);
+                bool startPostEnabled = (startPostEnabledRaw == "1");
+
+                string endPostEnabledRaw = (string.IsNullOrWhiteSpace(_data.EndPostEnabled) ? cfg.EndPostEnabled : _data.EndPostEnabled).Trim();
+                if (endPostEnabledRaw != "0" && endPostEnabledRaw != "1")
+                    throw new InvalidDataException("END_POST_ENABLED must be 0 or 1. Got: " + endPostEnabledRaw);
+                bool endPostEnabled = (endPostEnabledRaw == "1");
+
+                _data.StartPostEnabled = startPostEnabledRaw;
+                _data.EndPostEnabled = endPostEnabledRaw;
+
                 // Persist effective values
-                _data.SpacingIn = DistanceFormat.ToTeklaFeetInches(spacingIn, 16);
+                if (spacingModeRaw == "AUTOMATIC" || spacingModeRaw == "MAX")
+                    _data.SpacingIn = DistanceFormat.ToTeklaFeetInches(spacingIn, 16);
+                else
+                    _data.SpacingIn = spacingRaw;
                 _data.PostHeightIn = DistanceFormat.ToTeklaFeetInches(heightIn, 16);
-                _data.StartOffsetIn = DistanceFormat.ToTeklaFeetInches(startIn, 16);
-                _data.EndOffsetIn = DistanceFormat.ToTeklaFeetInches(endIn, 16);
+                _data.StartOffsetIn = NormalizeImperialDistanceList(startOffsetsIn);
+                _data.EndOffsetIn = NormalizeImperialDistanceList(endOffsetsIn);
                 _data.BaseOffsetIn = DistanceFormat.ToTeklaFeetInches(baseIn, 16);
                 _data.DeckEdgeIn = DistanceFormat.ToTeklaFeetInches(deckEdgeIn, 16);
                 _data.LineRef = lineRef;
@@ -338,8 +403,6 @@ namespace WDRailing
                 // ===================== Convert to mm =====================
                 double spacingMm = InchesToMm(spacingIn);
                 double postHeightMm = InchesToMm(heightIn);
-                double startOffsetMmAll = InchesToMm(startIn);
-                double endOffsetMmAll = InchesToMm(endIn);
                 double baseOffsetMm = InchesToMm(baseIn);
                 double deckEdgeMm = InchesToMm(deckEdgeIn);
 
@@ -366,6 +429,8 @@ namespace WDRailing
                 // Optional: prevents accidental duplicates if user picks extra colinear points
                 var usedPostKeys = new HashSet<string>();
 
+                int globalPostNumber = 0;
+
                 for (int seg = 0; seg < sideCount; seg++)
                 {
                     Point p1 = runPts[seg];
@@ -380,15 +445,26 @@ namespace WDRailing
                     Position.RotationEnum postRotation = GetPostRotationFromRun(dir);
 
                     // IMPORTANT: apply start/end offsets to EVERY side
-                    double segStartOffsetMm = startOffsetMmAll;
-                    double segEndOffsetMm = endOffsetMmAll;
+                    double segStartOffsetMm = InchesToMm(GetDistanceForSegment(startOffsetsIn, seg));
+                    double segEndOffsetMm = InchesToMm(GetDistanceForSegment(endOffsetsIn, seg));
 
-                    double usableLen = runLen - segStartOffsetMm - segEndOffsetMm;
-                    if (usableLen <= 1.0) continue;
+                    // Clamp the effective start/end distances to the actual segment length
+                    double startD = Math.Max(0.0, Math.Min(runLen, segStartOffsetMm));
+                    double endD = Math.Max(0.0, Math.Min(runLen, runLen - segEndOffsetMm));
+                    double usableLen = endD - startD;
 
-                    // Resolve post side per segment using host CENTERLINE relative to picked line.
-                    // This makes outside-perimeter and inside-opening picks behave consistently.
-                    double dMid = segStartOffsetMm + (usableLen * 0.5);
+                    Point railStartRefOnLine = new Point(
+                        p1.X + dir.X * startD,
+                        p1.Y + dir.Y * startD,
+                        p1.Z + dir.Z * startD);
+
+                    Point railEndRefOnLine = new Point(
+                        p1.X + dir.X * endD,
+                        p1.Y + dir.Y * endD,
+                        p1.Z + dir.Z * endD);
+
+                    // Resolve post side per segment using a midpoint on the effective segment span.
+                    double dMid = (startD + endD) * 0.5;
                     Point segMidOnLine = new Point(
                         p1.X + dir.X * dMid,
                         p1.Y + dir.Y * dMid,
@@ -401,8 +477,54 @@ namespace WDRailing
                     int segPostSideSign = ResolvePostSideSign(lineRef, left, segMidOnLine, segHostForSide, hasDeckEdge);
                     double segPostLateralMm = (segPostSideSign == 0) ? 0.0 : (segPostSideSign * lateralOffsetBaseMm);
 
-                    int stations = Math.Max(1, (int)Math.Ceiling(usableLen / spacingMm));
-                    double actualSpacingMm = usableLen / stations;
+                    List<double> stationOffsetsMm;
+
+                    double railStartTopZ = ResolvePostTopZAtStation(railStartRefOnLine, hostParts, baseOffsetMm, postHeightMm);
+                    double railEndTopZ = ResolvePostTopZAtStation(railEndRefOnLine, hostParts, baseOffsetMm, postHeightMm);
+
+                    Part railStartHost = null;
+                    if (hostParts.Count > 0)
+                        railStartHost = FindBestHostPartByXY(railStartRefOnLine, hostParts);
+
+                    Part railEndHost = null;
+                    if (hostParts.Count > 0)
+                        railEndHost = FindBestHostPartByXY(railEndRefOnLine, hostParts);
+
+                    // If the segment is too short for both offsets, still place one post.
+                    if (usableLen <= 1.0)
+                    {
+                        stationOffsetsMm = new List<double>();
+
+                        if (startPostEnabled)
+                            stationOffsetsMm.Add(startD);
+                        else if (endPostEnabled)
+                            stationOffsetsMm.Add(endD);
+                    }
+                    else
+                    {
+                        List<double> segSpacingPatternIn = null;
+                        if (spacingModeRaw == "EXACT START" || spacingModeRaw == "EXACT END")
+                            segSpacingPatternIn = GetSpacingPatternForSegment(spacingPatternBySegmentIn, seg);
+
+                        stationOffsetsMm = BuildStationOffsetsMm(
+                            usableLen,
+                            spacingModeRaw,
+                            spacingMm,
+                            segSpacingPatternIn);
+
+                        // Shift from 0..usableLen to actual distance along the segment
+                        for (int i = 0; i < stationOffsetsMm.Count; i++)
+                            stationOffsetsMm[i] = startD + stationOffsetsMm[i];
+
+                        if (!startPostEnabled && stationOffsetsMm.Count > 0)
+                            stationOffsetsMm.RemoveAt(0);
+
+                        if (!endPostEnabled && stationOffsetsMm.Count > 0)
+                            stationOffsetsMm.RemoveAt(stationOffsetsMm.Count - 1);
+                    }
+
+                    if (stationOffsetsMm.Count == 0)
+                        continue;
 
                     Point firstStationOnLine = null;
                     Point lastStationOnLine = null;
@@ -412,9 +534,9 @@ namespace WDRailing
                     Part lastHost = null;
 
                     // IMPORTANT: do NOT skip i=0 on later segments (no “sharing”)
-                    for (int i = 0; i <= stations; i++)
+                    for (int i = 0; i < stationOffsetsMm.Count; i++)
                     {
-                        double d = segStartOffsetMm + i * actualSpacingMm;
+                        double d = stationOffsetsMm[i];
 
                         Point stationOnLine = new Point(
                             p1.X + dir.X * d,
@@ -451,8 +573,12 @@ namespace WDRailing
                         }
 
                         inserted++;
+                        globalPostNumber++;
                         postObj.Modify();
                         CreatePostCap(postObj);
+
+                        bool flipThisPostConnection = connFlipPosts.Contains(globalPostNumber);
+                        string csValue = flipThisPostConnection ? "L" : "R";
 
                         if (railEnabled && railCount > 0)
                         {
@@ -508,7 +634,7 @@ namespace WDRailing
 
                         if (connEnabled && nearestHost != null)
                         {
-                            if (TryCreatePostConnection(nearestHost, postObj, connName, connAttr))
+                            if (TryCreatePostConnection(nearestHost, postObj, connName, connAttr, csValue))
                                 connOk++;
                             else
                                 connFail++;
@@ -529,16 +655,16 @@ namespace WDRailing
 
                         railSideSpecs.Add(new RailSideSpec
                         {
-                            StartOnLine = firstStationOnLine,
-                            EndOnLine = lastStationOnLine,
+                            StartOnLine = railStartRefOnLine,
+                            EndOnLine = railEndRefOnLine,
                             Dir = dir,
                             Left = left,
                             PostLineLateralMm = segPostLateralMm,
                             HalfPostWidthMm = halfPostWidthMm,
                             RailLateralMm = railLateralMm,
-                            FirstPostTopZ = firstPostTopZ,
-                            LastPostTopZ = lastPostTopZ,
-                            AnyHost = (firstHost ?? lastHost)
+                            FirstPostTopZ = railStartTopZ,
+                            LastPostTopZ = railEndTopZ,
+                            AnyHost = (railStartHost ?? railEndHost ?? firstHost ?? lastHost)
                         });
 
                         railSides++;
@@ -564,7 +690,27 @@ namespace WDRailing
                         seatSlotSizeIn,
                         seatSlotStandard,
                         seatSlotCutLenIn,
-                        seatSlotSpecial1
+                        seatSlotSpecial1,
+                        startLoopEnabled,
+                        startLoopMask,
+                        endLoopEnabled,
+                        endLoopMask
+                    );
+                }
+
+                if (railEnabled && railCount > 0 && railSideSpecs.Count > 0)
+                {
+                    CreateEndLoopsForPolyline(
+                        railSideSpecs,
+                        railCount,
+                        railStartOffsetMm,
+                        railEndOffsetMm,
+                        railFromTopMm,
+                        railSpacingMm,
+                        startLoopEnabled,
+                        startLoopMask,
+                        endLoopEnabled,
+                        endLoopMask
                     );
                 }
 
@@ -585,6 +731,19 @@ namespace WDRailing
                 Operation.DisplayPrompt("WDRailing ERROR: " + ex.Message);
                 return true;
             }
+        }
+
+        private static bool[] BuildAllRowsMask(int railCount, bool enabled)
+        {
+            var mask = new bool[Math.Max(0, railCount)];
+
+            if (!enabled)
+                return mask;
+
+            for (int i = 0; i < mask.Length; i++)
+                mask[i] = true;
+
+            return mask;
         }
 
 
@@ -608,7 +767,232 @@ namespace WDRailing
             return xi + "|" + yi + "|" + zi;
         }
 
+        private static List<double> BuildStationOffsetsMm(
+    double usableLenMm,
+    string spacingMode,
+    double targetSpacingMm,
+    List<double> patternIn)
+        {
+            var offsets = new List<double>();
 
+            if (usableLenMm <= 1.0)
+            {
+                offsets.Add(0.0);
+                return offsets;
+            }
+
+            spacingMode = (spacingMode ?? "AUTOMATIC").Trim().ToUpperInvariant();
+
+            if (spacingMode == "AUTOMATIC")
+            {
+                if (targetSpacingMm <= 0.0)
+                    throw new InvalidDataException("Automatic spacing must be > 0.");
+
+                int stations = Math.Max(1, (int)Math.Ceiling(usableLenMm / targetSpacingMm));
+                double actualSpacingMm = usableLenMm / stations;
+
+                for (int i = 0; i <= stations; i++)
+                    offsets.Add(i * actualSpacingMm);
+
+                return offsets;
+            }
+
+            if (spacingMode == "MAX")
+            {
+                if (targetSpacingMm <= 0.0)
+                    throw new InvalidDataException("Max spacing must be > 0.");
+
+                offsets.Add(0.0);
+
+                double d = 0.0;
+                while (d + targetSpacingMm < usableLenMm - 0.5)
+                {
+                    d += targetSpacingMm;
+                    offsets.Add(d);
+                }
+
+                if (Math.Abs(offsets[offsets.Count - 1] - usableLenMm) > 0.5)
+                    offsets.Add(usableLenMm);
+
+                return offsets;
+            }
+
+            if (patternIn == null || patternIn.Count == 0)
+                throw new InvalidDataException("Exact spacing mode requires a spacing pattern.");
+
+            var patternMm = new List<double>();
+            foreach (double v in patternIn)
+                patternMm.Add(InchesToMm(v));
+
+            if (spacingMode == "EXACT START")
+            {
+                offsets.Add(0.0);
+
+                double d = 0.0;
+                for (int i = 0; i < patternMm.Count; i++)
+                {
+                    double next = d + patternMm[i];
+                    if (next >= usableLenMm - 0.5)
+                        break;
+
+                    offsets.Add(next);
+                    d = next;
+                }
+
+                if (Math.Abs(offsets[offsets.Count - 1] - usableLenMm) > 0.5)
+                    offsets.Add(usableLenMm);
+
+                return offsets;
+            }
+
+            if (spacingMode == "EXACT END")
+            {
+                var rev = new List<double>();
+                rev.Add(usableLenMm);
+
+                double d = usableLenMm;
+                for (int i = 0; i < patternMm.Count; i++)
+                {
+                    double next = d - patternMm[i];
+                    if (next <= 0.5)
+                        break;
+
+                    rev.Add(next);
+                    d = next;
+                }
+
+                rev.Add(0.0);
+                rev.Sort();
+
+                double last = double.MinValue;
+                foreach (double v in rev)
+                {
+                    if (offsets.Count == 0 || Math.Abs(v - last) > 0.5)
+                    {
+                        offsets.Add(v);
+                        last = v;
+                    }
+                }
+
+                return offsets;
+            }
+
+            throw new InvalidDataException("Unsupported spacing mode: " + spacingMode);
+        }
+
+        private static double ResolvePostTopZAtStation(Point stationOnLine, List<Part> hostParts, double baseOffsetMm, double postHeightMm)
+        {
+            Part nearestHost = null;
+            if (hostParts != null && hostParts.Count > 0)
+                nearestHost = FindBestHostPartByXY(stationOnLine, hostParts);
+
+            double baseZ = stationOnLine.Z + baseOffsetMm;
+            if (nearestHost != null && TryGetPartTopZ(nearestHost, out double topZ))
+                baseZ = topZ + baseOffsetMm;
+
+            return baseZ + postHeightMm;
+        }
+
+        private void CreateEndLoopsForPolyline(
+    List<RailSideSpec> railSideSpecs,
+    int railCount,
+    double railStartOffsetMm,
+    double railEndOffsetMm,
+    double railFromTopMm,
+    double railSpacingMm,
+    bool startLoopEnabled,
+    bool[] startLoopMask,
+    bool endLoopEnabled,
+    bool[] endLoopMask)
+        {
+            if (railSideSpecs == null || railSideSpecs.Count == 0 || railCount <= 0)
+                return;
+
+            if (startLoopEnabled)
+            {
+                CreateSingleTerminalEndLoop(
+                    railSideSpecs[0],
+                    atStart: true,
+                    railCount: railCount,
+                    railTerminalOffsetMm: railStartOffsetMm,
+                    railFromTopMm: railFromTopMm,
+                    railSpacingMm: railSpacingMm,
+                    rowMask: startLoopMask);
+            }
+
+            if (endLoopEnabled)
+            {
+                CreateSingleTerminalEndLoop(
+                    railSideSpecs[railSideSpecs.Count - 1],
+                    atStart: false,
+                    railCount: railCount,
+                    railTerminalOffsetMm: railEndOffsetMm,
+                    railFromTopMm: railFromTopMm,
+                    railSpacingMm: railSpacingMm,
+                    rowMask: endLoopMask);
+            }
+        }
+
+        private void CreateSingleTerminalEndLoop(
+    RailSideSpec side,
+    bool atStart,
+    int railCount,
+    double railTerminalOffsetMm,
+    double railFromTopMm,
+    double railSpacingMm,
+    bool[] rowMask)
+        {
+            if (side == null || rowMask == null || railCount <= 0)
+                return;
+
+            if (!TryGetSelectedRowRange(rowMask, railCount, out int topRow, out int bottomRow))
+                return;
+
+            if (topRow == bottomRow)
+                return;
+
+            double railOutsideMm = InchesToMm(1.5);
+            if (TryGetOutsideDimMm("TS1-1/2X1-1/2X.188", out var outsideMm))
+                railOutsideMm = outsideMm;
+
+            double halfRailMm = railOutsideMm * 0.5;
+
+            Vector dirXY = GetDirXYUnit(side.Dir);
+            Point onLine = atStart ? side.StartOnLine : side.EndOnLine;
+            double topOfPostZ = atStart ? side.FirstPostTopZ : side.LastPostTopZ;
+
+            // Rail terminal plane:
+            //   start = StartOnLine - Dir * railStartOffset
+            //   end   = EndOnLine   + Dir * railEndOffset
+            //
+            // We want the OUTSIDE FACE of the vertical loop on that plane,
+            // so move the loop centerline inward by half the rail OD.
+            double along = atStart
+                ? (-railTerminalOffsetMm + halfRailMm)
+                : (railTerminalOffsetMm - halfRailMm);
+
+            double x = onLine.X + side.Left.X * side.RailLateralMm + dirXY.X * along;
+            double y = onLine.Y + side.Left.Y * side.RailLateralMm + dirXY.Y * along;
+
+            double zTopRow = topOfPostZ - railFromTopMm - (topRow * railSpacingMm);
+            double zBottomRow = topOfPostZ - railFromTopMm - (bottomRow * railSpacingMm);
+
+            Point p1 = new Point(x, y, zTopRow - halfRailMm);
+            Point p2 = new Point(x, y, zBottomRow + halfRailMm);
+
+            Beam closure = CreateStraightRailMember(p1, p2);
+            if (closure == null)
+                return;
+
+            closure.SetUserProperty("WD_END_LOOP", 1);
+            closure.SetUserProperty("WD_END_LOOP_END", atStart ? "START" : "END");
+            closure.SetUserProperty(
+                "WD_END_LOOP_ROWS",
+                (topRow + 1).ToString(CultureInfo.InvariantCulture) + "-" +
+                (bottomRow + 1).ToString(CultureInfo.InvariantCulture));
+
+            closure.Modify();
+        }
 
         private static double ParseDoubleOrThrow(string raw)
         {
@@ -622,11 +1006,191 @@ namespace WDRailing
             throw new InvalidDataException("Invalid stored coordinate: " + raw);
         }
 
+        private static List<double> ParseImperialDistanceListOrThrow(string raw, bool allowNegative)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                throw new InvalidDataException("Distance list is blank.");
+
+            string[] parts;
+
+            // If user uses commas/semicolons, prefer those.
+            if (raw.IndexOf(',') >= 0 || raw.IndexOf(';') >= 0)
+            {
+                parts = raw.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+            }
+            else
+            {
+                // Space-separated list, e.g. 1'-6" 1'-0"
+                parts = Regex.Split(raw.Trim(), @"\s+");
+            }
+
+            var values = new List<double>();
+            foreach (string part in parts)
+            {
+                string s = (part ?? "").Trim();
+                if (s.Length == 0) continue;
+
+                values.Add(ParseImperialInchesOrThrow(s, allowNegative));
+            }
+
+            if (values.Count == 0)
+                throw new InvalidDataException("No valid distances were found in: " + raw);
+
+            return values;
+        }
+
+        private static double GetDistanceForSegment(IReadOnlyList<double> values, int segmentIndex)
+        {
+            if (values == null || values.Count == 0)
+                return 0.0;
+
+            if (segmentIndex < values.Count)
+                return values[segmentIndex];
+
+            return values[values.Count - 1];
+        }
+
+        private static string NormalizeImperialDistanceList(IEnumerable<double> values)
+        {
+            var parts = new List<string>();
+
+            foreach (double v in values)
+            {
+                if (v < 0)
+                    parts.Add("-" + DistanceFormat.ToTeklaFeetInches(Math.Abs(v), 16));
+                else
+                    parts.Add(DistanceFormat.ToTeklaFeetInches(v, 16));
+            }
+
+            return string.Join(" ", parts);
+        }
+        private static HashSet<int> ParsePositiveIndexSet(string raw)
+        {
+            var set = new HashSet<int>();
+            if (string.IsNullOrWhiteSpace(raw))
+                return set;
+
+            foreach (Match m in Regex.Matches(raw, @"\d+"))
+            {
+                if (int.TryParse(m.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n > 0)
+                    set.Add(n);
+            }
+
+            return set;
+        }
+
+        private static List<List<double>> ParseSegmentedSpacingPatternOrThrow(string raw, bool allowNegative)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                throw new InvalidDataException("Spacing pattern is blank.");
+
+            string[] segmentGroups = raw.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            var result = new List<List<double>>();
+
+            foreach (string groupRaw in segmentGroups)
+            {
+                string group = (groupRaw ?? "").Trim();
+                if (group.Length == 0) continue;
+
+                result.Add(ParseSpacingPatternGroupOrThrow(group, allowNegative));
+            }
+
+            if (result.Count == 0)
+                throw new InvalidDataException("No valid spacing segment groups were found in: " + raw);
+
+            return result;
+        }
+
+        private static List<double> ParseSpacingPatternGroupOrThrow(string raw, bool allowNegative)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                throw new InvalidDataException("Spacing pattern group is blank.");
+
+            string[] tokens;
+
+            // Prefer commas inside one segment pattern.
+            if (raw.IndexOf(',') >= 0)
+                tokens = raw.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            else
+                tokens = Regex.Split(raw.Trim(), @"\s+");
+
+            var values = new List<double>();
+
+            foreach (string tokenRaw in tokens)
+            {
+                string token = (tokenRaw ?? "").Trim();
+                if (token.Length == 0) continue;
+
+                int repeat = 1;
+                string distRaw = token;
+
+                Match m = Regex.Match(token, @"^\s*(\d+)\s*\*\s*(.+?)\s*$");
+                if (m.Success)
+                {
+                    if (!int.TryParse(m.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out repeat) || repeat < 1)
+                        throw new InvalidDataException("Invalid spacing repeat token: " + token);
+
+                    distRaw = m.Groups[2].Value.Trim();
+                }
+
+                double distIn = ParseImperialInchesOrThrow(distRaw, allowNegative);
+                if (distIn <= 0.0)
+                    throw new InvalidDataException("Spacing values must be > 0. Got: " + distRaw);
+
+                for (int i = 0; i < repeat; i++)
+                    values.Add(distIn);
+            }
+
+            if (values.Count == 0)
+                throw new InvalidDataException("No valid spacing values found in group: " + raw);
+
+            return values;
+        }
+
+        private static List<double> GetSpacingPatternForSegment(List<List<double>> patternsBySegment, int segmentIndex)
+        {
+            if (patternsBySegment == null || patternsBySegment.Count == 0)
+                throw new InvalidDataException("No exact spacing pattern groups were provided.");
+
+            if (segmentIndex < patternsBySegment.Count)
+                return patternsBySegment[segmentIndex];
+
+            return patternsBySegment[patternsBySegment.Count - 1];
+        }
+
+        private static string NormalizePositiveIndexSet(HashSet<int> set)
+        {
+            if (set == null || set.Count == 0)
+                return "";
+
+            var vals = new List<int>(set);
+            vals.Sort();
+            return string.Join(" ", vals);
+        }
+
         private static double InchesToMm(double inches) { return inches * 25.4; }
         private static double MmToInches(double mm) { return mm / 25.4; }
 
         private static string ToInv(double d) => d.ToString("0.###", CultureInfo.InvariantCulture);
 
+        private Beam CreateStraightRailMember(Point start, Point end)
+        {
+            var rail = new Beam(start, end);
+
+            rail.Profile.ProfileString = "TS1-1/2X1-1/2X.188";
+            rail.Material.MaterialString = "A50";
+            rail.Class = "1";
+            rail.Name = "RAIL END LOOP";
+
+            rail.Position.Plane = Position.PlaneEnum.MIDDLE;
+            rail.Position.Depth = Position.DepthEnum.MIDDLE;
+            rail.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!rail.Insert())
+                return null;
+
+            return rail;
+        }
 
         private bool KeepWithPrompt(string msg)
         {

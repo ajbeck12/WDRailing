@@ -57,6 +57,48 @@ namespace WDRailing
 
         // ---------------- Input / persistence ----------------
 
+        private static bool[] ParseRailRowMask(string raw, int railCount)
+        {
+            var mask = new bool[Math.Max(0, railCount)];
+            if (railCount <= 0) return mask;
+
+            if (string.IsNullOrWhiteSpace(raw) || raw.Trim().Equals("ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                for (int i = 0; i < railCount; i++) mask[i] = true;
+                return mask;
+            }
+
+            if (raw.Trim().Equals("NONE", StringComparison.OrdinalIgnoreCase))
+                return mask;
+
+            string[] parts = raw.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string part in parts)
+            {
+                if (!int.TryParse(part.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int row))
+                    throw new InvalidDataException("Invalid rail row in loop mask: " + part);
+
+                if (row < 1 || row > railCount)
+                    throw new InvalidDataException("Rail row out of range in loop mask: " + row);
+
+                mask[row - 1] = true; // 1-based input, 0-based internal
+            }
+
+            return mask;
+        }
+
+        private static string NormalizeRailRowMask(bool[] mask)
+        {
+            if (mask == null || mask.Length == 0) return "NONE";
+
+            var rows = new List<string>();
+            for (int i = 0; i < mask.Length; i++)
+                if (mask[i]) rows.Add((i + 1).ToString(CultureInfo.InvariantCulture));
+
+            if (rows.Count == 0) return "NONE";
+            if (rows.Count == mask.Length) return "ALL";
+
+            return string.Join(",", rows);
+        }
 
         private static double ParseImperialInchesOrThrow(string raw, bool allowNegative)
         {

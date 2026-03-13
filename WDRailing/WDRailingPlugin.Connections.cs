@@ -1,11 +1,11 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
-using System.Text.RegularExpressions;
 using System.Reflection;
-
+using System.Text.RegularExpressions;
 using Tekla.Structures;
 using Tekla.Structures.Geometry3d;
 using Tekla.Structures.Model;
@@ -18,7 +18,7 @@ namespace WDRailing
 {
     public partial class WDRailingPlugin
     {
-        private bool TryCreatePostConnection(Part host, Part post, string connNameOrNumber, string attrFile)
+        private bool TryCreatePostConnection(Part host, Part post, string connNameOrNumber, string attrFile, string csValue = "R")
         {
             try
             {
@@ -26,10 +26,8 @@ namespace WDRailing
                 if (string.IsNullOrWhiteSpace(connNameOrNumber))
                     throw new InvalidOperationException("ConnectionName is blank.");
 
-                // IMPORTANT: insert as a true Connection (main + secondary), not a generic Component.
-                // Try host as main first, then swap if that fails.
-                return TryInsertConnection(host, post, connNameOrNumber, attrFile)
-                    || TryInsertConnection(post, host, connNameOrNumber, attrFile);
+                return TryInsertConnection(host, post, connNameOrNumber, attrFile, csValue)
+                    || TryInsertConnection(post, host, connNameOrNumber, attrFile, csValue);
             }
             catch (Exception ex)
             {
@@ -39,7 +37,7 @@ namespace WDRailing
         }
 
 
-        private bool TryInsertConnection(Part mainPart, Part secondaryPart, string connNameOrNumber, string attrFile)
+        private bool TryInsertConnection(Part mainPart, Part secondaryPart, string connNameOrNumber, string attrFile, string csValue = "R")
         {
             var conn = new Tekla.Structures.Model.Connection();
 
@@ -48,14 +46,16 @@ namespace WDRailing
             else
                 conn.Name = connNameOrNumber.Trim();
 
-            // This matches Tekla UI behavior: "Main part" then "Secondary part"
             conn.SetPrimaryObject(mainPart);
             conn.SetSecondaryObject(secondaryPart);
 
             if (!string.IsNullOrWhiteSpace(attrFile))
             {
-                InvokeLoadAttributes(conn, attrFile.Trim()); // use reflection; Connection is not a Component in this TS version
+                InvokeLoadAttributes(conn, attrFile.Trim());
             }
+
+            // Override CS after loading attribute file so this wins.
+            conn.SetAttribute("AL", csValue);
 
             return conn.Insert();
         }

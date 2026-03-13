@@ -114,19 +114,23 @@ namespace WDRailing
         //  - caps non-butt ends.
         //  - inserts corner seat angle (slots only, no pilot holes) per row/per corner.
         private void CreateCornerAwareRailsForPolyline(
-            List<RailSideSpec> sides,
-            bool isClosed,
-            double railStartOffsetMm,
-            double railEndOffsetMm,
-            double railFromTopMm,
-            int railCount,
-            double railSpacingMm,
-            double seatHoleLineIn,
-            double seatSlotC2CIn,
-            double seatSlotSizeIn,
-            string seatSlotStandard,
-            double seatSlotCutLengthIn,
-            bool seatSlotSpecialFirstLayer)
+    List<RailSideSpec> sides,
+    bool isClosed,
+    double railStartOffsetMm,
+    double railEndOffsetMm,
+    double railFromTopMm,
+    int railCount,
+    double railSpacingMm,
+    double seatHoleLineIn,
+    double seatSlotC2CIn,
+    double seatSlotSizeIn,
+    string seatSlotStandard,
+    double seatSlotCutLengthIn,
+    bool seatSlotSpecialFirstLayer,
+    bool startLoopEnabled,
+    bool[] startLoopMask,
+    bool endLoopEnabled,
+    bool[] endLoopMask)
         {
             if (sides == null || sides.Count == 0 || railCount <= 0) return;
 
@@ -140,22 +144,9 @@ namespace WDRailing
             if (TryGetOutsideDimMm(railProfile, out var railOutsideMm))
                 halfRailWidthMm = railOutsideMm * 0.5;
 
+            double railOutsideDiaMm = 2.0 * halfRailWidthMm;
+
             int n = sides.Count;
-            if (n == 1)
-            {
-                var only = sides[0];
-                CreateRails(
-                    only.StartOnLine, only.EndOnLine,
-                    only.Dir, only.Left,
-                    only.PostLineLateralMm,
-                    only.HalfPostWidthMm,
-                    only.FirstPostTopZ, only.LastPostTopZ,
-                    only.AnyHost,
-                    railStartOffsetMm, railEndOffsetMm,
-                    railFromTopMm,
-                    railCount, railSpacingMm);
-                return;
-            }
 
             for (int r = 0; r < railCount; r++)
             {
@@ -193,9 +184,8 @@ namespace WDRailing
                 var capStart = new bool[n];
                 var capEnd = new bool[n];
                 var cornerSeats = new List<CornerSeatSpec>();
-                var fitSpecs = new List<CornerFitSpec>();  // FIX: declare fitSpecs here
+                var fitSpecs = new List<CornerFitSpec>();
 
-                // Keep unmodified row centerlines for stable corner-center math.
                 var baseStarts = new Point[n];
                 var baseEnds = new Point[n];
                 for (int i = 0; i < n; i++)
@@ -206,8 +196,8 @@ namespace WDRailing
 
                 if (!isClosed)
                 {
-                    capStart[0] = true;       // open polyline start
-                    capEnd[n - 1] = true;     // open polyline end
+                    capStart[0] = true;
+                    capEnd[n - 1] = true;
                 }
 
                 int cornerCount = isClosed ? n : (n - 1);
@@ -219,7 +209,6 @@ namespace WDRailing
                     Vector prevDir = UnitVector(sides[prev].Dir);
                     Vector nextDir = UnitVector(sides[next].Dir);
 
-                    // FIX: compute cornerPt FIRST so we can use it to extend the capped end.
                     Point cornerPt;
                     if (TryIntersectLines2D(baseEnds[prev], prevDir, baseStarts[next], nextDir, out Point xpt))
                     {
@@ -234,30 +223,26 @@ namespace WDRailing
                             0.5 * (ends[prev].Z + starts[next].Z));
                     }
 
-                    // Inside/outside determination (needed for ComputeButtStartToSideFace and seat angle).
                     double turnForOffset = CrossZ(prevDir, nextDir);
                     double lateralForOffset = 0.5 * (sides[prev].RailLateralMm + sides[next].RailLateralMm);
                     if (Math.Abs(lateralForOffset) < 1e-6) lateralForOffset = sides[prev].RailLateralMm;
                     if (Math.Abs(lateralForOffset) < 1e-6) lateralForOffset = 1.0;
                     bool isInsideForOffset = (turnForOffset * lateralForOffset) < 0.0;
 
-                    // FIX: cornerButtOffsetMm is simply halfRailWidthMm.
                     double cornerButtOffsetMm = halfRailWidthMm;
 
-                    // Option A: PREV is non-butt (cap at end), NEXT is butt side.
                     bool optPrevCapOk = ComputeButtStartToSideFace(
                         ends[prev], prevDir, sides[prev].Left,
                         starts[next], nextDir,
-                        isInsideForOffset,        // FIX: pass required isInsideCorner arg
+                        isInsideForOffset,
                         cornerButtOffsetMm,
                         out Point optNextStart, out double moveNextButtMm,
                         out Point optPrevCapFacePoint, out Vector optPrevCapFaceNormal);
 
-                    // Option B: NEXT is non-butt (cap at start), PREV is butt side.
                     bool optNextCapOk = ComputeButtStartToSideFace(
                         starts[next], nextDir, sides[next].Left,
                         ends[prev], prevDir,
-                        isInsideForOffset,        // FIX: pass required isInsideCorner arg
+                        isInsideForOffset,
                         cornerButtOffsetMm,
                         out Point optPrevEnd, out double movePrevButtMm,
                         out Point optNextCapFacePoint, out Vector optNextCapFaceNormal);
@@ -281,15 +266,12 @@ namespace WDRailing
 
                     if (choosePrevCap)
                     {
-                        // PREV is non-butt + capped. NEXT butts into PREV side face.
-                        starts[next] = optNextStart;   // butt side correctly positioned
+                        starts[next] = optNextStart;
                         capEnd[prev] = true;
 
-                        // FIX: extend the capped end forward to the face of the butt rail.
-                        // Without this the cap floats one rail-width short of the corner.
                         ends[prev] = new Point(
-                            cornerPt.X - prevDir.X * cornerButtOffsetMm,
-                            cornerPt.Y - prevDir.Y * cornerButtOffsetMm,
+                            cornerPt.X + prevDir.X * cornerButtOffsetMm,
+                            cornerPt.Y + prevDir.Y * cornerButtOffsetMm,
                             ends[prev].Z);
 
                         fitSpecs.Add(new CornerFitSpec
@@ -302,14 +284,12 @@ namespace WDRailing
                     }
                     else if (chooseNextCap)
                     {
-                        // NEXT is non-butt + capped. PREV butts into NEXT side face.
-                        ends[prev] = optPrevEnd;       // butt side correctly positioned
+                        ends[prev] = optPrevEnd;
                         capStart[next] = true;
 
-                        // FIX: extend the capped start backward to the face of the butt rail.
                         starts[next] = new Point(
-                            cornerPt.X + nextDir.X * cornerButtOffsetMm,
-                            cornerPt.Y + nextDir.Y * cornerButtOffsetMm,
+                            cornerPt.X - nextDir.X * cornerButtOffsetMm,
+                            cornerPt.Y - nextDir.Y * cornerButtOffsetMm,
                             starts[next].Z);
 
                         fitSpecs.Add(new CornerFitSpec
@@ -322,11 +302,9 @@ namespace WDRailing
                     }
                     else
                     {
-                        // Fallback: just cap previous side end, no butt adjustment.
                         capEnd[prev] = true;
                     }
 
-                    // Corner classification for seat angle.
                     double turn = CrossZ(prevDir, nextDir);
                     double lateral = 0.5 * (sides[prev].RailLateralMm + sides[next].RailLateralMm);
                     if (Math.Abs(lateral) < 1e-6) lateral = sides[prev].RailLateralMm;
@@ -346,7 +324,48 @@ namespace WDRailing
                     });
                 }
 
-                // Build rails + caps
+                // OPEN-END LOOP RULES
+                if (!isClosed)
+                {
+                    // START
+                    if (startLoopEnabled && IsSelectedLoopRow(startLoopMask, railCount, r))
+                    {
+                        bool isEndRow = IsTerminalLoopEndRow(startLoopMask, railCount, r);
+                        bool isMidRow = IsMiddleLoopRow(startLoopMask, railCount, r);
+
+                        // Top/bottom loop rows KEEP their caps.
+                        // Middle loop rows trim back to the inside face and get NO cap.
+                        capStart[0] = isEndRow;
+
+                        if (isMidRow)
+                        {
+                            Vector d0 = UnitVector(sides[0].Dir);
+                            starts[0] = new Point(
+                                starts[0].X + d0.X * railOutsideDiaMm,
+                                starts[0].Y + d0.Y * railOutsideDiaMm,
+                                starts[0].Z);
+                        }
+                    }
+
+                    // END
+                    if (endLoopEnabled && IsSelectedLoopRow(endLoopMask, railCount, r))
+                    {
+                        bool isEndRow = IsTerminalLoopEndRow(endLoopMask, railCount, r);
+                        bool isMidRow = IsMiddleLoopRow(endLoopMask, railCount, r);
+
+                        capEnd[n - 1] = isEndRow;
+
+                        if (isMidRow)
+                        {
+                            Vector dn = UnitVector(sides[n - 1].Dir);
+                            ends[n - 1] = new Point(
+                                ends[n - 1].X - dn.X * railOutsideDiaMm,
+                                ends[n - 1].Y - dn.Y * railOutsideDiaMm,
+                                ends[n - 1].Z);
+                        }
+                    }
+                }
+
                 var firstPieceBySide = new Beam[n];
                 var lastPieceBySide = new Beam[n];
 
@@ -370,7 +389,6 @@ namespace WDRailing
                     if (capEnd[i]) CreateRailEndCap(ends[i], d, halfRailWidthMm);
                 }
 
-                // Apply end fittings on butt sides.
                 foreach (var fit in fitSpecs)
                 {
                     if (fit == null) continue;
@@ -383,7 +401,6 @@ namespace WDRailing
                     TryForceBeamEndToPlane(moving, fit.AtStart, fit.FacePoint, fit.FaceNormal);
                 }
 
-                // Corner seat angle per corner/row (slots only, no pilot holes)
                 foreach (var cs in cornerSeats)
                 {
                     CreateCornerSeatAngleSlotsOnly(
@@ -402,9 +419,312 @@ namespace WDRailing
                         cs.CornerClass
                     );
                 }
+
+                // END LOOP SEAT-ANGLE HOOKS
+                if (!isClosed)
+                {
+                    // Start terminal seat angle for CURRENT row only
+                    if (startLoopEnabled && IsSelectedLoopRow(startLoopMask, railCount, r))
+                    {
+                        Point startInsidePoint = GetTerminalLoopInsidePoint(
+                            sides[0],
+                            atStart: true,
+                            railTerminalOffsetMm: railStartOffsetMm,
+                            railOutsideDiaMm: railOutsideDiaMm);
+
+                        double railZ = sides[0].FirstPostTopZ - railFromTopMm - (r * railSpacingMm);
+
+                        CreateTerminalLoopSeatAngleHook(
+                            startInsidePoint,
+                            UnitVector(sides[0].Dir),
+                            railZ,
+                            halfRailWidthMm,
+                            seatHoleLineIn,
+                            seatSlotC2CIn,
+                            seatSlotSizeIn,
+                            seatSlotStandard,
+                            seatSlotCutLengthIn,
+                            seatSlotSpecialFirstLayer,
+                            atStart: true,
+                            isBottomLoopRow: IsBottomLoopEndRow(startLoopMask, railCount, r));
+                    }
+
+                    // End terminal seat angle for CURRENT row only
+                    if (endLoopEnabled && IsSelectedLoopRow(endLoopMask, railCount, r))
+                    {
+                        Point endInsidePoint = GetTerminalLoopInsidePoint(
+                            sides[n - 1],
+                            atStart: false,
+                            railTerminalOffsetMm: railEndOffsetMm,
+                            railOutsideDiaMm: railOutsideDiaMm);
+
+                        double railZ = sides[n - 1].LastPostTopZ - railFromTopMm - (r * railSpacingMm);
+
+                        CreateTerminalLoopSeatAngleHook(
+                            endInsidePoint,
+                            UnitVector(sides[n - 1].Dir),
+                            railZ,
+                            halfRailWidthMm,
+                            seatHoleLineIn,
+                            seatSlotC2CIn,
+                            seatSlotSizeIn,
+                            seatSlotStandard,
+                            seatSlotCutLengthIn,
+                            seatSlotSpecialFirstLayer,
+                            atStart: false,
+                            isBottomLoopRow: IsBottomLoopEndRow(endLoopMask, railCount, r));
+                    }
+                }
             }
         }
 
+        private static bool IsSelectedLoopRow(bool[] rowMask, int railCount, int rowIndex)
+        {
+            if (rowMask == null) return false;
+            if (rowIndex < 0 || rowIndex >= railCount) return false;
+            if (rowIndex >= rowMask.Length) return false;
+            return rowMask[rowIndex];
+        }
+
+        private static bool TryGetSelectedRowRange(bool[] rowMask, int railCount, out int firstRow, out int lastRow)
+        {
+            firstRow = -1;
+            lastRow = -1;
+
+            if (rowMask == null || railCount <= 0)
+                return false;
+
+            int max = Math.Min(rowMask.Length, railCount);
+            for (int i = 0; i < max; i++)
+            {
+                if (!rowMask[i]) continue;
+
+                if (firstRow < 0)
+                    firstRow = i;
+
+                lastRow = i;
+            }
+
+            return firstRow >= 0 && lastRow >= 0;
+        }
+
+        private static bool IsMiddleLoopRow(bool[] rowMask, int railCount, int rowIndex)
+        {
+            if (!TryGetSelectedRowRange(rowMask, railCount, out int firstRow, out int lastRow))
+                return false;
+
+            if (rowIndex < 0 || rowIndex >= railCount) return false;
+            if (rowIndex >= rowMask.Length) return false;
+
+            return rowMask[rowIndex] && rowIndex > firstRow && rowIndex < lastRow;
+        }
+
+        private static bool IsTerminalLoopEndRow(bool[] rowMask, int railCount, int rowIndex)
+        {
+            if (!TryGetSelectedRowRange(rowMask, railCount, out int firstRow, out int lastRow))
+                return false;
+
+            return rowIndex == firstRow || rowIndex == lastRow;
+        }
+
+        private Point GetTerminalLoopInsidePoint(
+            RailSideSpec side,
+            bool atStart,
+            double railTerminalOffsetMm,
+            double railOutsideDiaMm)
+        {
+            Vector dir = UnitVector(side.Dir);
+            Point onLine = atStart ? side.StartOnLine : side.EndOnLine;
+
+            // Terminal plane of horizontal rail outside face:
+            // start = StartOnLine - Dir * railStartOffset
+            // end   = EndOnLine   + Dir * railEndOffset
+            //
+            // Inside face is one rail OD inward from that plane.
+            double along = atStart
+                ? (-railTerminalOffsetMm + railOutsideDiaMm)
+                : (railTerminalOffsetMm - railOutsideDiaMm);
+
+            return new Point(
+                onLine.X + side.Left.X * side.RailLateralMm + dir.X * along,
+                onLine.Y + side.Left.Y * side.RailLateralMm + dir.Y * along,
+                0.0);
+        }
+
+        private void CreateTerminalLoopSeatAngleHook(
+    Point insidePointXY,
+    Vector railDir,
+    double railZ,
+    double halfRailDepthMm,
+    double seatHoleLineIn,
+    double seatSlotC2CIn,
+    double seatSlotSizeIn,
+    string seatSlotStandard,
+    double seatSlotCutLengthIn,
+    bool seatSlotSpecialFirstLayer,
+    bool atStart,
+    bool isBottomLoopRow)
+        {
+            try
+            {
+                Vector dirXY = GetDirXYUnit(railDir);
+
+                // Beam axis runs across the rail end face.
+                Vector faceAxis = GetLeftVectorXY(dirXY);
+
+                // Start side needs mirrored beam direction so the seat faces correctly.
+                if (atStart)
+                    faceAxis = new Vector(-faceAxis.X, -faceAxis.Y, -faceAxis.Z);
+
+                double L = GetSeatAngleLengthMm();
+
+                // Normal loop seats sit under the rail.
+                // Bottom loop seat must sit on TOP of the bottom rail so it ties the rail + loop.
+                double zSeat = isBottomLoopRow
+                    ? (railZ + halfRailDepthMm + SEAT_Z_ADJUST_MM)
+                    : (railZ - halfRailDepthMm + SEAT_Z_ADJUST_MM);
+
+                Point a = new Point(
+                    insidePointXY.X - faceAxis.X * (L * 0.5),
+                    insidePointXY.Y - faceAxis.Y * (L * 0.5),
+                    zSeat);
+
+                Point b = new Point(
+                    insidePointXY.X + faceAxis.X * (L * 0.5),
+                    insidePointXY.Y + faceAxis.Y * (L * 0.5),
+                    zSeat);
+
+                var seat = new Beam(a, b);
+                seat.Name = SEAT_ANGLE_NAME;
+                seat.Profile.ProfileString = SEAT_ANGLE_PROFILE;
+                seat.Material.MaterialString = SEAT_ANGLE_MATERIAL;
+                seat.Class = SEAT_ANGLE_CLASS;
+
+                seat.Position.Plane = Position.PlaneEnum.LEFT;
+
+                if (isBottomLoopRow)
+                {
+                    seat.Position.Depth = Position.DepthEnum.FRONT;
+                    seat.Position.Rotation = Position.RotationEnum.FRONT;
+                }
+                else
+                {
+                    seat.Position.Depth = Position.DepthEnum.BEHIND;
+                    seat.Position.Rotation = Position.RotationEnum.BELOW;
+                }
+
+                if (!seat.Insert())
+                    return;
+
+                TryAddTerminalLoopSlotsOnly(
+                    seat,
+                    faceAxis,
+                    seatHoleLineIn,
+                    seatSlotC2CIn,
+                    seatSlotSizeIn,
+                    seatSlotStandard,
+                    seatSlotCutLengthIn,
+                    seatSlotSpecialFirstLayer,
+                    isBottomLoopRow);
+            }
+            catch
+            {
+                // best effort only
+            }
+        }
+
+        private static void TryAddTerminalLoopSlotsOnly(
+    Beam seat,
+    Vector slotAxisDir,
+    double holeLineFromBendIn,
+    double slotC2CIn,
+    double slotSizeIn,
+    string slotStandard,
+    double slotCutLengthIn,
+    bool slotSpecialFirstLayer,
+    bool isBottomLoopRow)
+        {
+            if (seat == null) return;
+
+            try
+            {
+                var cs = seat.GetCoordinateSystem();
+
+                Vector axisX = NormalizeVectorOrFallback(cs.AxisX, new Vector(1.0, 0.0, 0.0));
+                Vector axisY = NormalizeVectorOrFallback(cs.AxisY, GetDirXYUnit(slotAxisDir));
+
+                Vector axisZ = new Vector(
+                    axisX.Y * axisY.Z - axisX.Z * axisY.Y,
+                    axisX.Z * axisY.X - axisX.X * axisY.Z,
+                    axisX.X * axisY.Y - axisX.Y * axisY.X);
+                axisZ = NormalizeVectorOrFallback(axisZ, new Vector(0.0, 0.0, 1.0));
+
+                Point mid = new Point(
+                    (seat.StartPoint.X + seat.EndPoint.X) * 0.5,
+                    (seat.StartPoint.Y + seat.EndPoint.Y) * 0.5,
+                    (seat.StartPoint.Z + seat.EndPoint.Z) * 0.5);
+
+                double bendOffsetMm = InchesToMm(holeLineFromBendIn);
+                double legThicknessHalfMm = InchesToMm(0.125 * 0.5);
+                double orientLenMm = Math.Max(5.0, InchesToMm(0.25));
+
+                Point slot1 = new Point(
+                    mid.X + axisY.X * bendOffsetMm + axisZ.X * legThicknessHalfMm,
+                    mid.Y + axisY.Y * bendOffsetMm + axisZ.Y * legThicknessHalfMm,
+                    mid.Z + axisY.Z * bendOffsetMm + axisZ.Z * legThicknessHalfMm);
+
+                Point slot2 = new Point(
+                    mid.X + axisZ.X * bendOffsetMm + axisY.X * legThicknessHalfMm,
+                    mid.Y + axisZ.Y * bendOffsetMm + axisY.Y * legThicknessHalfMm,
+                    mid.Z + axisZ.Z * bendOffsetMm + axisY.Z * legThicknessHalfMm);
+
+                Position.RotationEnum slot1Rotation = isBottomLoopRow
+                    ? Position.RotationEnum.FRONT
+                    : Position.RotationEnum.BELOW;
+
+                Position.RotationEnum slot2Rotation = isBottomLoopRow
+                    ? Position.RotationEnum.TOP
+                    : Position.RotationEnum.FRONT;
+
+                TryInsertSeatSlotHole(
+                    seat,
+                    slot1,
+                    axisX,
+                    orientLenMm,
+                    slotStandard,
+                    slotCutLengthIn,
+                    slotSizeIn,
+                    slotC2CIn,
+                    slotSpecialFirstLayer,
+                    slot1Rotation,
+                    Position.DepthEnum.MIDDLE);
+
+                TryInsertSeatSlotHole(
+                    seat,
+                    slot2,
+                    axisX,
+                    orientLenMm,
+                    slotStandard,
+                    slotCutLengthIn,
+                    slotSizeIn,
+                    slotC2CIn,
+                    slotSpecialFirstLayer,
+                    slot2Rotation,
+                    Position.DepthEnum.MIDDLE);
+            }
+            catch
+            {
+                // best effort only
+            }
+        }
+
+        private static bool IsBottomLoopEndRow(bool[] rowMask, int railCount, int rowIndex)
+        {
+            if (!TryGetSelectedRowRange(rowMask, railCount, out int firstRow, out int lastRow))
+                return false;
+
+            return rowIndex == lastRow;
+        }
 
         // Finds where a moving rail point should be so it butts to the side face of a fixed rail.
         // Returns adjusted point + signed move distance along movingDir + chosen face plane data.
@@ -483,7 +803,7 @@ namespace WDRailing
                 movingPoint.Z + dMove.Z * t);
 
             moveAlongMm = t;
-            chosenFacePoint = new Point(q.X, q.Y, adjustedPoint.Z);
+            chosenFacePoint = new Point(adjustedPoint.X, adjustedPoint.Y, adjustedPoint.Z);
 
             // Stable normal orientation for fallback use.
             Vector nFit = n;
