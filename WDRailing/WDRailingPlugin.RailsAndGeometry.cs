@@ -1325,6 +1325,77 @@ namespace WDRailing
             return sideSign * halfPostWidthMm;
         }
 
+        private void CreateRoundPostRpc(
+    Point postTopCenter,
+    Vector left,
+    Point stationOnLine,
+    Part nearestHost,
+    double segPostLateralMm,
+    double halfPostWidthMm)
+        {
+            if (postTopCenter == null)
+                return;
+
+            double riseMm = InchesToMm(1.25);
+
+            // Start point = centered on post, 1-1/4" above top of post.
+            Point start = new Point(
+                postTopCenter.X,
+                postTopCenter.Y,
+                postTopCenter.Z - riseMm);
+
+            // Face the same side as the seat angle / host side.
+            int faceSign = ResolveRpcFacingSign(left, stationOnLine, nearestHost, segPostLateralMm);
+
+            // End point = on outside face of post, same elevation as start,
+            // pointing toward the framing/reference-line side.
+            Point end = new Point(
+                start.X + left.X * (faceSign * halfPostWidthMm),
+                start.Y + left.Y * (faceSign * halfPostWidthMm),
+                start.Z);
+
+            var rpc = new Brep
+            {
+                StartPoint = start,
+                EndPoint = end
+            };
+
+            rpc.Profile.ProfileString = "RPC";
+            rpc.Name = "RPC";
+            rpc.Class = "6";
+            rpc.Material.MaterialString = "A36";
+            rpc.Position.Plane = Position.PlaneEnum.MIDDLE;
+            rpc.Position.Depth = Position.DepthEnum.MIDDLE;
+            rpc.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!rpc.Insert())
+            {
+                Operation.DisplayPrompt("WDRailing: failed to insert RPC item.");
+                return;
+            }
+
+            rpc.Modify();
+        }
+
+        private static int ResolveRpcFacingSign(
+            Vector left,
+            Point stationOnLine,
+            Part nearestHost,
+            double segPostLateralMm)
+        {
+            // Prefer the same side logic used for the seat-angle/host side.
+            int sign = DetermineConnectionSideSign(left, stationOnLine, nearestHost);
+            if (sign != 0)
+                return sign;
+
+            // Fallback: face back toward the reference line.
+            // If post is on +LEFT side, reference line is toward -LEFT, and vice versa.
+            if (Math.Abs(segPostLateralMm) > 0.001)
+                return (segPostLateralMm > 0.0) ? -1 : +1;
+
+            return +1;
+        }
+
 
         private static Vector GetLeftVectorXY(Vector dirUnit)
         {

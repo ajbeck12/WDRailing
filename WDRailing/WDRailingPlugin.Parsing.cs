@@ -103,52 +103,150 @@ namespace WDRailing
         private static double ParseImperialInchesOrThrow(string raw, bool allowNegative)
         {
             if (string.IsNullOrWhiteSpace(raw))
-                throw new InvalidDataException("Distance string is blank.");
+                throw new InvalidDataException("Distance value is blank.");
 
             string s = raw.Trim();
-            s = s.Replace("”", "\"").Replace("“", "\"")
-                 .Replace("′", "'").Replace("’", "'");
-            s = s.ToLowerInvariant();
-            s = s.Replace("inches", "").Replace("inch", "").Replace(" in", "").Trim();
 
-            bool neg = false;
-            if (s.StartsWith("+")) s = s.Substring(1).Trim();
-            else if (s.StartsWith("-")) { neg = true; s = s.Substring(1).Trim(); }
+            s = s.Replace("’", "'")
+                 .Replace("′", "'")
+                 .Replace("“", "\"")
+                 .Replace("”", "\"")
+                 .Replace("″", "\"")
+                 .Replace("–", "-")
+                 .Replace("—", "-")
+                 .Trim();
 
-            double inches;
-            int apos = s.IndexOf('\'');
-            if (apos >= 0)
+            bool negative = false;
+            if (s.StartsWith("-", StringComparison.Ordinal))
             {
-                string feetPart = s.Substring(0, apos).Trim();
-                string inchPart = s.Substring(apos + 1).Trim().Replace("\"", "").Trim();
-                if (inchPart.StartsWith("-")) inchPart = inchPart.Substring(1).Trim();
+                negative = true;
+                s = s.Substring(1).Trim();
+            }
 
-                double feet = 0.0;
-                if (feetPart.Length > 0 && !TryParseDoubleLoose(feetPart, out feet))
-                    throw new InvalidDataException("Invalid feet value: " + raw);
+            if (negative && !allowNegative)
+                throw new InvalidDataException("Negative value not allowed: " + raw);
 
-                double inchOnly = 0.0;
-                if (inchPart.Length > 0 && !TryParseMixedNumber(inchPart, out inchOnly))
-                    throw new InvalidDataException("Invalid inch value: " + raw);
+            // Fix glued inch+fraction input:
+            // 2"3/4    -> 2 3/4
+            // 1'-6"3/4 -> 1'-6 3/4
+            s = Regex.Replace(s, @"(?<=\d)""\s*(?=\d+\s*/\s*\d+\s*$)", " ");
 
-                inches = feet * 12.0 + inchOnly;
+            double feet = 0.0;
+            double inches = 0.0;
+
+            int ftIdx = s.IndexOf('\'');
+            if (ftIdx >= 0)
+            {
+                string ftPart = s.Substring(0, ftIdx).Trim();
+                string inchPart = s.Substring(ftIdx + 1).Trim();
+
+                if (ftPart.Length > 0)
+                {
+                    if (!double.TryParse(ftPart, NumberStyles.Float, CultureInfo.InvariantCulture, out feet) &&
+                        !double.TryParse(ftPart, NumberStyles.Float, CultureInfo.CurrentCulture, out feet))
+                    {
+                        throw new InvalidDataException("Invalid feet value: " + raw);
+                    }
+                }
+
+                // IMPORTANT:
+                // In feet-inch notation, the dash is usually a separator, not a negative sign.
+                // So:
+                //   1'-6"     => 1' + 6"
+                //   1'-6 3/4" => 1' + 6 3/4"
+                if (inchPart.StartsWith("-", StringComparison.Ordinal))
+                    inchPart = inchPart.Substring(1).Trim();
+
+                inches = ParseImperialInchPartOrThrow(inchPart, raw);
             }
             else
             {
-                s = s.Replace("\"", "").Trim();
-                if (!TryParseMixedNumber(s, out inches))
-                    throw new InvalidDataException("Invalid distance: " + raw);
+                inches = ParseImperialInchPartOrThrow(s, raw);
             }
 
-            if (neg) inches = -Math.Abs(inches);
-
-            if (!allowNegative && inches <= 0.0)
-                throw new InvalidDataException("Distance must be > 0: " + raw);
-
-            return inches;
+            double total = feet * 12.0 + inches;
+            return negative ? -total : total;
         }
 
+        private static double ParseImperialInchPartOrThrow(string raw, string originalRaw)
+        {
+            string s = (raw ?? "").Trim();
+            if (s.Length == 0)
+                return 0.0;
 
+            s = s.Replace("\"", "").Trim();
+
+            // 6-3/4 -> 6 3/4
+            s = Regex.Replace(s, @"(?<=\d)-(?=\d+\s*/\s*\d+$)", " ");
+
+            string[] parts = Regex.Split(s, @"\s+");
+            var tokens = new List<string>();
+
+            foreach (string p in parts)
+            {
+                string t = (p ?? "").Trim();
+                if (t.Length > 0)
+                    tokens.Add(t);
+            }
+
+            if (tokens.Count == 0)
+                return 0.0;
+
+            // Fraction only: 3/4
+            if (tokens.Count == 1 && tokens[0].Contains("/"))
+                return ParseFractionOrThrow(tokens[0], originalRaw);
+
+            // Whole inches only: 6 or 6.25
+            if (tokens.Count == 1)
+            {
+                if (double.TryParse(tokens[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double wholeOnly))
+                    return wholeOnly;
+
+                if (double.TryParse(tokens[0], NumberStyles.Float, CultureInfo.CurrentCulture, out wholeOnly))
+                    return wholeOnly;
+
+                throw new InvalidDataException("Invalid inch value: " + originalRaw);
+            }
+
+            // Whole + fraction: 6 3/4
+            if (tokens.Count == 2)
+            {
+                if (!double.TryParse(tokens[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double whole) &&
+                    !double.TryParse(tokens[0], NumberStyles.Float, CultureInfo.CurrentCulture, out whole))
+                {
+                    throw new InvalidDataException("Invalid whole-inch value: " + originalRaw);
+                }
+
+                double frac = ParseFractionOrThrow(tokens[1], originalRaw);
+                return whole + frac;
+            }
+
+            throw new InvalidDataException("Invalid imperial distance: " + originalRaw);
+        }
+
+        private static double ParseFractionOrThrow(string raw, string originalRaw)
+        {
+            Match m = Regex.Match((raw ?? "").Trim(), @"^(\d+)\s*/\s*(\d+)$");
+            if (!m.Success)
+                throw new InvalidDataException("Invalid fraction: " + originalRaw);
+
+            if (!double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double num) &&
+                !double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.CurrentCulture, out num))
+            {
+                throw new InvalidDataException("Invalid fraction numerator: " + originalRaw);
+            }
+
+            if (!double.TryParse(m.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double den) &&
+                !double.TryParse(m.Groups[2].Value, NumberStyles.Float, CultureInfo.CurrentCulture, out den))
+            {
+                throw new InvalidDataException("Invalid fraction denominator: " + originalRaw);
+            }
+
+            if (Math.Abs(den) < 0.0000001)
+                throw new InvalidDataException("Fraction denominator cannot be zero: " + originalRaw);
+
+            return num / den;
+        }
         private static bool TryParseMixedNumber(string s, out double value)
         {
             value = 0.0;

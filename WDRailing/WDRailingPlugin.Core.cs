@@ -71,6 +71,14 @@ namespace WDRailing
             if (string.IsNullOrWhiteSpace(_data.StartLoopEnabled)) _data.StartLoopEnabled = cfg.StartLoopEnabled;
             if (string.IsNullOrWhiteSpace(_data.EndLoopEnabled)) _data.EndLoopEnabled = cfg.EndLoopEnabled;
             if (_data.ConnFlipPosts == null) _data.ConnFlipPosts = cfg.ConnFlipPosts ?? "";
+            if (string.IsNullOrWhiteSpace(_data.RailMode)) _data.RailMode = cfg.RailMode;
+
+            if (string.IsNullOrWhiteSpace(_data.RoundRailProfile)) _data.RoundRailProfile = cfg.RoundRailProfile;
+            if (string.IsNullOrWhiteSpace(_data.RoundRailStartOffsetIn)) _data.RoundRailStartOffsetIn = cfg.RoundRailStartOffsetIn;
+            if (string.IsNullOrWhiteSpace(_data.RoundRailEndOffsetIn)) _data.RoundRailEndOffsetIn = cfg.RoundRailEndOffsetIn;
+            if (string.IsNullOrWhiteSpace(_data.RoundRailFromTopIn)) _data.RoundRailFromTopIn = cfg.RoundRailFromTopIn;
+            if (string.IsNullOrWhiteSpace(_data.RoundRailCount)) _data.RoundRailCount = cfg.RoundRailCount;
+            if (string.IsNullOrWhiteSpace(_data.RoundRailSpacingIn)) _data.RoundRailSpacingIn = cfg.RoundRailSpacingIn;
 
         }
 
@@ -229,6 +237,33 @@ namespace WDRailing
                 _data.SpacingMode = spacingModeRaw;
                 _data.SpacingIn = spacingRaw;
 
+                string railModeRaw = (string.IsNullOrWhiteSpace(_data.RailMode) ? cfg.RailMode : _data.RailMode).Trim().ToUpperInvariant();
+                if (railModeRaw != "SQUARE" && railModeRaw != "ROUND")
+                    throw new InvalidDataException("RAIL_MODE must be SQUARE or ROUND. Got: " + railModeRaw);
+                string roundRailProfile = (string.IsNullOrWhiteSpace(_data.RoundRailProfile) ? cfg.RoundRailProfile : _data.RoundRailProfile).Trim();
+
+                double roundRailStartIn = ParseImperialInchesOrThrow(
+    string.IsNullOrWhiteSpace(_data.RoundRailStartOffsetIn) ? cfg.RoundRailStartOffsetIn : _data.RoundRailStartOffsetIn,
+    allowNegative: true);
+
+                double roundRailEndIn = ParseImperialInchesOrThrow(
+                    string.IsNullOrWhiteSpace(_data.RoundRailEndOffsetIn) ? cfg.RoundRailEndOffsetIn : _data.RoundRailEndOffsetIn,
+                    allowNegative: true);
+
+                // Allow 0 and negative so round rail can be at or above top of post.
+                double roundRailFromTopIn = ParseImperialInchesOrThrow(
+                    string.IsNullOrWhiteSpace(_data.RoundRailFromTopIn) ? cfg.RoundRailFromTopIn : _data.RoundRailFromTopIn,
+                    allowNegative: true);
+
+                string roundRailCountRaw = (string.IsNullOrWhiteSpace(_data.RoundRailCount) ? cfg.RoundRailCount : _data.RoundRailCount).Trim();
+                if (!int.TryParse(roundRailCountRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int roundRailCount))
+                    throw new InvalidDataException("ROUND_RAIL_COUNT must be an integer. Got: " + roundRailCountRaw);
+                roundRailCount = Math.Max(0, roundRailCount);
+
+                double roundRailSpacingIn = ParseImperialInchesOrThrow(
+                    string.IsNullOrWhiteSpace(_data.RoundRailSpacingIn) ? cfg.RoundRailSpacingIn : _data.RoundRailSpacingIn,
+                    allowNegative: false);
+
                 double heightIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.PostHeightIn) ? cfg.PostHeightIn : _data.PostHeightIn, allowNegative: false);
                 List<double> startOffsetsIn = ParseImperialDistanceListOrThrow(
                     string.IsNullOrWhiteSpace(_data.StartOffsetIn) ? cfg.StartOffsetIn : _data.StartOffsetIn,
@@ -271,9 +306,18 @@ namespace WDRailing
                     throw new InvalidDataException("RAIL_ENABLED must be 0 or 1. Got: " + railEnabledRaw);
                 bool railEnabled = (railEnabledRaw == "1");
 
-                double railStartIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.RailStartOffsetIn) ? cfg.RailStartOffsetIn : _data.RailStartOffsetIn, allowNegative: true);
-                double railEndIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.RailEndOffsetIn) ? cfg.RailEndOffsetIn : _data.RailEndOffsetIn, allowNegative: true);
-                double railFromTopIn = ParseImperialInchesOrThrow(string.IsNullOrWhiteSpace(_data.RailFromTopIn) ? cfg.RailFromTopIn : _data.RailFromTopIn, allowNegative: false);
+                double railStartIn = ParseImperialInchesOrThrow(
+    string.IsNullOrWhiteSpace(_data.RailStartOffsetIn) ? cfg.RailStartOffsetIn : _data.RailStartOffsetIn,
+    allowNegative: true);
+
+                double railEndIn = ParseImperialInchesOrThrow(
+                    string.IsNullOrWhiteSpace(_data.RailEndOffsetIn) ? cfg.RailEndOffsetIn : _data.RailEndOffsetIn,
+                    allowNegative: true);
+
+                // Allow 0 and negative so rail can be at or above top of post.
+                double railFromTopIn = ParseImperialInchesOrThrow(
+                    string.IsNullOrWhiteSpace(_data.RailFromTopIn) ? cfg.RailFromTopIn : _data.RailFromTopIn,
+                    allowNegative: true);
 
                 string railCountRaw = (string.IsNullOrWhiteSpace(_data.RailCount) ? cfg.RailCount : _data.RailCount).Trim();
                 if (!int.TryParse(railCountRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int railCount))
@@ -385,7 +429,7 @@ namespace WDRailing
 
                 _data.RailStartOffsetIn = (railStartIn < 0 ? "-" : "") + DistanceFormat.ToTeklaFeetInches(Math.Abs(railStartIn), 16);
                 _data.RailEndOffsetIn = (railEndIn < 0 ? "-" : "") + DistanceFormat.ToTeklaFeetInches(Math.Abs(railEndIn), 16);
-                _data.RailFromTopIn = DistanceFormat.ToTeklaFeetInches(railFromTopIn, 16);
+                _data.RailFromTopIn = (railFromTopIn < 0 ? "-" : "") + DistanceFormat.ToTeklaFeetInches(Math.Abs(railFromTopIn), 16);
 
                 _data.SeatHoleLineIn = DistanceFormat.ToTeklaFeetInches(seatHoleLineIn, 16);
 
@@ -400,6 +444,14 @@ namespace WDRailing
                 _data.SeatPilotStandard = seatPilotStandard;
                 _data.SeatPilotCutLengthIn = DistanceFormat.ToTeklaFeetInches(seatPilotCutLenIn, 16);
 
+                _data.RailMode = railModeRaw;
+                _data.RoundRailProfile = roundRailProfile;
+                _data.RoundRailStartOffsetIn = (roundRailStartIn < 0 ? "-" : "") + DistanceFormat.ToTeklaFeetInches(Math.Abs(roundRailStartIn), 16);
+                _data.RoundRailEndOffsetIn = (roundRailEndIn < 0 ? "-" : "") + DistanceFormat.ToTeklaFeetInches(Math.Abs(roundRailEndIn), 16);
+                _data.RoundRailFromTopIn = (roundRailFromTopIn < 0 ? "-" : "") + DistanceFormat.ToTeklaFeetInches(Math.Abs(roundRailFromTopIn), 16);
+                _data.RoundRailCount = roundRailCount.ToString(CultureInfo.InvariantCulture);
+                _data.RoundRailSpacingIn = DistanceFormat.ToTeklaFeetInches(roundRailSpacingIn, 16);
+
                 // ===================== Convert to mm =====================
                 double spacingMm = InchesToMm(spacingIn);
                 double postHeightMm = InchesToMm(heightIn);
@@ -410,6 +462,10 @@ namespace WDRailing
                 double railEndOffsetMm = InchesToMm(railEndIn);    // keep sign
                 double railFromTopMm = InchesToMm(railFromTopIn);
                 double railSpacingMm = InchesToMm(railSpacingIn);
+                double roundRailStartOffsetMm = InchesToMm(roundRailStartIn);
+                double roundRailEndOffsetMm = InchesToMm(roundRailEndIn);
+                double roundRailFromTopMm = InchesToMm(roundRailFromTopIn);
+                double roundRailSpacingMm = InchesToMm(roundRailSpacingIn);
 
                 // Half-width for face-based offsets (best effort)
                 double halfPostWidthMm = 0.0;
@@ -422,6 +478,7 @@ namespace WDRailing
                 // ===================== Process each segment (each side is independent) =====================
                 int inserted = 0, failed = 0, connOk = 0, connFail = 0;
                 int railSides = 0;
+                int sleeveOk = 0, sleeveFail = 0, cutOk = 0, cutFail = 0;
 
                 // Collect each side rail definition first; build corner-aware rails after all sides are processed.
                 var railSideSpecs = new List<RailSideSpec>();
@@ -575,52 +632,41 @@ namespace WDRailing
                         inserted++;
                         globalPostNumber++;
                         postObj.Modify();
-                        CreatePostCap(postObj);
+
+                        if (railModeRaw == "ROUND")
+                        {
+                            CreateRoundPostRpc(
+                                postEnd,
+                                left,
+                                stationOnLine,
+                                nearestHost,
+                                segPostLateralMm,
+                                halfPostWidthMm);
+
+                            if (railEnabled && roundRailCount > 0)
+                            {
+                                CreateRoundRailSleevesAndCutsAtPost(
+                                    postObj,
+                                    postStart,
+                                    postEnd,
+                                    dir,
+                                    roundRailCount,
+                                    roundRailFromTopMm,
+                                    roundRailSpacingMm,
+                                    halfPostWidthMm,
+                                    ref sleeveOk,
+                                    ref sleeveFail,
+                                    ref cutOk,
+                                    ref cutFail);
+                            }
+                        }
+                        else
+                        {
+                            CreatePostCap(postObj);
+                        }
 
                         bool flipThisPostConnection = connFlipPosts.Contains(globalPostNumber);
                         string csValue = flipThisPostConnection ? "L" : "R";
-
-                        if (railEnabled && railCount > 0)
-                        {
-                            // Regular post seat angles should be independent from corner-seat logic.
-                            // Keep creating these at every post (including posts next to corners).
-                            int seatSideSign = DetermineConnectionSideSign(left, stationOnLine, nearestHost);
-                            if (seatSideSign == 0) seatSideSign = +1;
-
-                            Vector dirXY = GetDirXYUnit(dir);
-
-                            for (int r = 0; r < railCount; r++)
-                            {
-                                // Rail centerline Z for this row at THIS post
-                                double railZ = postEnd.Z - railFromTopMm - (r * railSpacingMm);
-
-                                double halfRailDepthMm = InchesToMm(1.5) * 0.5;
-                                if (TryGetOutsideDimMm("TS1-1/2X1-1/2X.188", out var railOutsideMm))
-                                    halfRailDepthMm = railOutsideMm * 0.5;
-
-                                CreateRailPostSeatAngle(
-                                    stationOnLine,
-                                    dirXY,
-                                    left,
-                                    segPostLateralMm,
-                                    halfPostWidthMm,
-                                    seatSideSign,
-                                    railZ,
-                                    halfRailDepthMm,
-                                    postObj,
-                                    seatHoleLineIn,
-                                    seatSlotC2CIn,
-                                    seatSlotSizeIn,
-                                    seatSlotStandard,
-                                    seatSlotCutLenIn,
-                                    seatSlotSpecial1,
-                                    seatPilotC2CIn,
-                                    seatPilotDiaIn,
-                                    seatPilotStandard,
-                                    seatPilotCutLenIn
-                                );
-                            }
-                        }
 
                         if (firstStationOnLine == null)
                         {
@@ -628,6 +674,7 @@ namespace WDRailing
                             firstPostTopZ = postEnd.Z;
                             firstHost = nearestHost;
                         }
+
                         lastStationOnLine = stationOnLine;
                         lastPostTopZ = postEnd.Z;
                         lastHost = nearestHost;
@@ -641,12 +688,27 @@ namespace WDRailing
                         }
                     }
 
-                    // Store this side for a corner-aware rail pass later.
-                    if (railEnabled && railCount > 0 && firstStationOnLine != null && lastStationOnLine != null)
+                    // Store this side for a later rail pass after ALL segments are collected.
+                    if (railEnabled &&
+                        ((railModeRaw == "SQUARE" && railCount > 0) ||
+                         (railModeRaw == "ROUND" && roundRailCount > 0)) &&
+                        firstStationOnLine != null &&
+                        lastStationOnLine != null)
                     {
-                        double halfRailWidthMm = InchesToMm(1.5) * 0.5;
-                        if (TryGetOutsideDimMm("TS1-1/2X1-1/2X.188", out var railOutsideMmForSide))
-                            halfRailWidthMm = railOutsideMmForSide * 0.5;
+                        double halfRailWidthMm;
+
+                        if (railModeRaw == "ROUND")
+                        {
+                            halfRailWidthMm = InchesToMm(0.75); // fallback = 1.5" OD / 2
+                            if (TryGetOutsideDimMm(roundRailProfile, out var roundRailOutsideMm))
+                                halfRailWidthMm = roundRailOutsideMm * 0.5;
+                        }
+                        else
+                        {
+                            halfRailWidthMm = InchesToMm(1.5) * 0.5;
+                            if (TryGetOutsideDimMm("TS1-1/2X1-1/2X.188", out var railOutsideMmForSide))
+                                halfRailWidthMm = railOutsideMmForSide * 0.5;
+                        }
 
                         int railSideSign = DetermineConnectionSideSign(left, firstStationOnLine, (firstHost ?? lastHost));
                         if (railSideSign == 0) railSideSign = +1;
@@ -670,13 +732,10 @@ namespace WDRailing
                         railSides++;
                     }
                 }
-
-
-
-                // Build rails in one pass so corners can trim/extend correctly and get non-butt end caps.
-                if (railEnabled && railCount > 0 && railSideSpecs.Count > 0)
+                // Build rails after ALL segment side specs have been collected.
+                if (railEnabled && railModeRaw == "SQUARE" && railCount > 0 && railSideSpecs.Count > 0)
                 {
-                    bool isClosed = false; // closed loops are currently represented by repeating first point; we strip that above.
+                    bool isClosed = false;
                     CreateCornerAwareRailsForPolyline(
                         railSideSpecs,
                         isClosed,
@@ -696,10 +755,7 @@ namespace WDRailing
                         endLoopEnabled,
                         endLoopMask
                     );
-                }
 
-                if (railEnabled && railCount > 0 && railSideSpecs.Count > 0)
-                {
                     CreateEndLoopsForPolyline(
                         railSideSpecs,
                         railCount,
@@ -714,6 +770,19 @@ namespace WDRailing
                     );
                 }
 
+                if (railEnabled && railModeRaw == "ROUND" && roundRailCount > 0 && railSideSpecs.Count > 0)
+                {
+                    CreateRoundRailsForPolyline(
+                        railSideSpecs,
+                        roundRailProfile,
+                        roundRailStartOffsetMm,
+                        roundRailEndOffsetMm,
+                        roundRailFromTopMm,
+                        roundRailCount,
+                        roundRailSpacingMm
+                    );
+                }
+
                 _model.CommitChanges();
 
                 Operation.DisplayPrompt(
@@ -722,7 +791,11 @@ namespace WDRailing
                     ", failed=" + failed +
                     ", rail_sides=" + railSides +
                     ", conn_ok=" + connOk +
-                    ", conn_fail=" + connFail);
+                    ", conn_fail=" + connFail +
+                    ", sleeve_ok=" + sleeveOk +
+                    ", sleeve_fail=" + sleeveFail +
+                    ", cut_ok=" + cutOk +
+                    ", cut_fail=" + cutFail);
 
                 return true;
             }
@@ -994,6 +1067,137 @@ namespace WDRailing
             closure.Modify();
         }
 
+        private void CreateRoundRailSleevesAndCutsAtPost(
+    Beam postObj,
+    Point postStart,
+    Point postEnd,
+    Vector dir,
+    int roundRailCount,
+    double roundRailFromTopMm,
+    double roundRailSpacingMm,
+    double halfPostWidthMm,
+    ref int sleeveOk,
+    ref int sleeveFail,
+    ref int cutOk,
+    ref int cutFail)
+        {
+            if (postObj == null || postStart == null || postEnd == null || roundRailCount <= 0)
+                return;
+
+            Vector dirXY = GetDirXYUnit(dir);
+            if (dirXY == null)
+                return;
+
+            // EXACT post size only
+            double sleeveHalfLenMm = halfPostWidthMm;
+            double cutHalfLenMm = halfPostWidthMm;
+
+            for (int row = 0; row < roundRailCount; row++)
+            {
+                double z = postEnd.Z - roundRailFromTopMm - (row * roundRailSpacingMm);
+                Point center = new Point(postStart.X, postStart.Y, z);
+
+                Beam sleeve = CreateRoundRailSleeveInsert(center, dirXY, sleeveHalfLenMm);
+                if (sleeve != null) sleeveOk++;
+                else sleeveFail++;
+
+                // no cut on top rail row
+                if (row == 0)
+                    continue;
+
+                if (CreateRoundRailPostCut(postObj, center, dirXY, cutHalfLenMm))
+                    cutOk++;
+                else
+                    cutFail++;
+            }
+        }
+
+        private Beam CreateRoundRailSleeveInsert(Point center, Vector dirXY, double halfLenMm)
+        {
+            if (center == null || dirXY == null || halfLenMm <= 0.0)
+                return null;
+
+            Point start = new Point(
+                center.X - dirXY.X * halfLenMm,
+                center.Y - dirXY.Y * halfLenMm,
+                center.Z);
+
+            Point end = new Point(
+                center.X + dirXY.X * halfLenMm,
+                center.Y + dirXY.Y * halfLenMm,
+                center.Z);
+
+            Beam sleeve = new Beam(start, end);
+
+            sleeve.Profile.ProfileString = "PD42.8625*1.5875";
+            sleeve.Material.MaterialString = "A36";
+            sleeve.Class = "1";
+            sleeve.Name = "RAIL SLEEVE INSERT";
+
+            sleeve.PartNumber.Prefix = "SL1";
+            sleeve.PartNumber.StartNumber = 0;
+            sleeve.AssemblyNumber.Prefix = "SL1";
+            sleeve.AssemblyNumber.StartNumber = 0;
+
+            sleeve.Position.Plane = Position.PlaneEnum.MIDDLE;
+            sleeve.Position.Depth = Position.DepthEnum.MIDDLE;
+            sleeve.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!sleeve.Insert())
+                return null;
+
+            sleeve.Modify();
+            return sleeve;
+        }
+
+        private bool CreateRoundRailPostCut(Beam postObj, Point center, Vector dirXY, double halfLenMm)
+        {
+            if (postObj == null || center == null || dirXY == null || halfLenMm <= 0.0)
+                return false;
+
+            Point start = new Point(
+                center.X - dirXY.X * halfLenMm,
+                center.Y - dirXY.Y * halfLenMm,
+                center.Z);
+
+            Point end = new Point(
+                center.X + dirXY.X * halfLenMm,
+                center.Y + dirXY.Y * halfLenMm,
+                center.Z);
+
+            Beam operative = new Beam(start, end);
+            operative.Profile.ProfileString = "D44.45";
+            operative.Material.MaterialString = "A36";
+            operative.Class = BooleanPart.BooleanOperativeClassName;
+            operative.Name = "ROUND RAIL POST CUT";
+            operative.Position.Plane = Position.PlaneEnum.MIDDLE;
+            operative.Position.Depth = Position.DepthEnum.MIDDLE;
+            operative.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!operative.Insert())
+                return false;
+
+            BooleanPart cut = new BooleanPart();
+            cut.Father = postObj;
+            cut.Type = BooleanPart.BooleanTypeEnum.BOOLEAN_CUT;
+
+            if (!cut.SetOperativePart(operative))
+            {
+                operative.Delete();
+                return false;
+            }
+
+            if (!cut.Insert())
+            {
+                operative.Delete();
+                return false;
+            }
+
+            postObj.Modify();
+            operative.Delete();
+            return true;
+        }
+
         private static double ParseDoubleOrThrow(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw))
@@ -1037,6 +1241,58 @@ namespace WDRailing
                 throw new InvalidDataException("No valid distances were found in: " + raw);
 
             return values;
+        }
+
+        private void CreateRoundRailsForPolyline(
+            List<RailSideSpec> sides,
+            string roundProfile,
+            double railStartOffsetMm,
+            double railEndOffsetMm,
+            double railFromTopMm,
+            int railCount,
+            double railSpacingMm)
+        {
+            if (sides == null || sides.Count == 0 || railCount <= 0)
+                return;
+
+            const string railMaterial = "A53";
+            const string railClass = "1";
+            const string railName = "ROUND RAIL";
+
+            double maxLenMm = InchesToMm(240.0); // 20'-0"
+
+            for (int i = 0; i < sides.Count; i++)
+            {
+                RailSideSpec s = sides[i];
+
+                Point sLine = new Point(
+                    s.StartOnLine.X - s.Dir.X * railStartOffsetMm,
+                    s.StartOnLine.Y - s.Dir.Y * railStartOffsetMm,
+                    s.StartOnLine.Z - s.Dir.Z * railStartOffsetMm);
+
+                Point eLine = new Point(
+                    s.EndOnLine.X + s.Dir.X * railEndOffsetMm,
+                    s.EndOnLine.Y + s.Dir.Y * railEndOffsetMm,
+                    s.EndOnLine.Z + s.Dir.Z * railEndOffsetMm);
+
+                for (int r = 0; r < railCount; r++)
+                {
+                    double zStart = s.FirstPostTopZ - railFromTopMm - (r * railSpacingMm);
+                    double zEnd = s.LastPostTopZ - railFromTopMm - (r * railSpacingMm);
+
+                    Point a = new Point(
+                        sLine.X + s.Left.X * s.PostLineLateralMm,
+                        sLine.Y + s.Left.Y * s.PostLineLateralMm,
+                        zStart);
+
+                    Point b = new Point(
+                        eLine.X + s.Left.X * s.PostLineLateralMm,
+                        eLine.Y + s.Left.Y * s.PostLineLateralMm,
+                        zEnd);
+
+                    CreateRailPieces(a, b, maxLenMm, roundProfile, railMaterial, railClass, railName);
+                }
+            }
         }
 
         private static double GetDistanceForSegment(IReadOnlyList<double> values, int segmentIndex)

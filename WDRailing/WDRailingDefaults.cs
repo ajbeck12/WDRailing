@@ -63,6 +63,13 @@ namespace WDRailing
         public string ConnFlipPosts { get; private set; }
         public string StartPostEnabled { get; private set; }
         public string EndPostEnabled { get; private set; }
+        public string RailMode { get; private set; }
+        public string RoundRailProfile { get; private set; }
+        public string RoundRailStartOffsetIn { get; private set; }
+        public string RoundRailEndOffsetIn { get; private set; }
+        public string RoundRailFromTopIn { get; private set; }
+        public string RoundRailCount { get; private set; }
+        public string RoundRailSpacingIn { get; private set; }
 
         public static string GetConfigPath()
         {
@@ -126,6 +133,14 @@ namespace WDRailing
                 SpacingMode = GetOrDefault(kv, "SpacingMode", "AUTOMATIC"),
                 StartPostEnabled = GetOrDefault(kv, "StartPostEnabled", "1"),
                 EndPostEnabled = GetOrDefault(kv, "EndPostEnabled", "1"),
+                RailMode = GetOrDefault(kv, "RailMode", "SQUARE"),
+
+                RoundRailProfile = GetOrDefault(kv, "RoundRailProfile", "PIPE1-1/2X14GA"),
+                RoundRailStartOffsetIn = GetOrDefault(kv, "RoundRailStartOffsetIn", "18"),
+                RoundRailEndOffsetIn = GetOrDefault(kv, "RoundRailEndOffsetIn", "18"),
+                RoundRailFromTopIn = GetOrDefault(kv, "RoundRailFromTopIn", "3"),
+                RoundRailCount = GetOrDefault(kv, "RoundRailCount", "2"),
+                RoundRailSpacingIn = GetOrDefault(kv, "RoundRailSpacingIn", "21"),
 
             };
 

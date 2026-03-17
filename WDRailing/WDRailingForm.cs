@@ -1,5 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using Tekla.Structures.Dialog;
 
@@ -44,7 +47,14 @@ namespace WDRailing
         private ComboBox _cbSpacingMode;
         private ComboBox _cbStartPostEnabled;
         private ComboBox _cbEndPostEnabled;
+        private ComboBox _cbRailMode;
 
+        private TextBox _tbRoundRailProfile;
+        private TextBox _tbRoundRailStartOffsetIn;
+        private TextBox _tbRoundRailEndOffsetIn;
+        private TextBox _tbRoundRailFromTopIn;
+        private TextBox _tbRoundRailCount;
+        private TextBox _tbRoundRailSpacingIn;
         public WDRailingDialog()
         {
             BuildUi();
@@ -154,14 +164,23 @@ namespace WDRailing
             _cbEndLoopEnabled = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
             _cbEndLoopEnabled.Items.AddRange(new object[] { "0", "1" });
             BindString(_cbEndLoopEnabled, "END_LOOP_ENABLED", "SelectedItem");
+            _cbRailMode = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cbRailMode.Items.AddRange(new object[] { "SQUARE", "ROUND" });
+            BindString(_cbRailMode, "RAIL_MODE", "SelectedItem");
+
+            _tbRoundRailProfile = NewText(); BindString(_tbRoundRailProfile, "RR_PROFILE");
+            _tbRoundRailStartOffsetIn = NewText(); BindString(_tbRoundRailStartOffsetIn, "RR_ST_OFF_IN");
+            _tbRoundRailEndOffsetIn = NewText(); BindString(_tbRoundRailEndOffsetIn, "RR_END_OFF_IN");
+            _tbRoundRailFromTopIn = NewText(); BindString(_tbRoundRailFromTopIn, "RR_TOP_IN");
+            _tbRoundRailCount = NewText(); BindString(_tbRoundRailCount, "RR_COUNT");
+            _tbRoundRailSpacingIn = NewText(); BindString(_tbRoundRailSpacingIn, "RR_SPACE_IN");
 
             // ---------------- Formatting hooks ----------------
 
             HookFmt(_tbRailSpacingIn, false);
             HookFmt(_tbRailStartOffsetIn, true);
             HookFmt(_tbRailEndOffsetIn, true);
-            HookFmt(_tbRailFromTopIn, false);
-
+            HookFmt(_tbRailFromTopIn, true);
             HookFmt(_tbSeatHoleLineIn, false);
 
             HookFmt(_tbSeatSlotC2CIn, false);
@@ -178,6 +197,10 @@ namespace WDRailing
             HookFmt(_tbEndOffsetIn, true);
             HookFmt(_tbBaseOffsetIn, true);
             HookFmt(_tbDeckEdgeIn, true);
+            HookFmt(_tbRoundRailStartOffsetIn, true);
+            HookFmt(_tbRoundRailEndOffsetIn, true);
+            HookFmt(_tbRoundRailFromTopIn, true);
+            HookFmt(_tbRoundRailSpacingIn, false);
 
             // ---------------- Tabs ----------------
 
@@ -193,6 +216,7 @@ namespace WDRailing
                 AddRow(table, r++, "Start post enabled (0/1)", _cbStartPostEnabled);
                 AddRow(table, r++, "End post enabled (0/1)", _cbEndPostEnabled);
                 AddRow(table, r++, "Base offset (can be negative)", _tbBaseOffsetIn);
+                AddRow(table, r++, "Rail mode", _cbRailMode);
                 tabs.TabPages.Add(tab);
             }
 
@@ -227,9 +251,9 @@ namespace WDRailing
                 tabs.TabPages.Add(tab);
             }
 
-            // Rail tab
+            //Square Rail tab
             {
-                var tab = NewTab("Rail", out var table);
+                var tab = NewTab("Square Rail", out var table);
                 int r = 0;
                 AddRow(table, r++, "Create rail (0/1)", _cbRailEnabled);
                 AddRow(table, r++, "Rail start offset", _tbRailStartOffsetIn);
@@ -241,6 +265,18 @@ namespace WDRailing
                 AddRow(table, r++, "Start end loop (0/1)", _cbStartLoopEnabled);
                 AddRow(table, r++, "End end loop (0/1)", _cbEndLoopEnabled);
 
+                tabs.TabPages.Add(tab);
+            }
+            //Round Rail tab
+            {
+                var tab = NewTab("Round Rail", out var table);
+                int r = 0;
+                AddRow(table, r++, "Round rail profile", _tbRoundRailProfile);
+                AddRow(table, r++, "Round rail start offset", _tbRoundRailStartOffsetIn);
+                AddRow(table, r++, "Round rail end offset", _tbRoundRailEndOffsetIn);
+                AddRow(table, r++, "Round rail center down from top of post", _tbRoundRailFromTopIn);
+                AddRow(table, r++, "Round rail count", _tbRoundRailCount);
+                AddRow(table, r++, "Round rail spacing (c/c)", _tbRoundRailSpacingIn);
                 tabs.TabPages.Add(tab);
             }
 
@@ -386,6 +422,16 @@ namespace WDRailing
 
             if ((_cbEndPostEnabled.SelectedItem == null && string.IsNullOrWhiteSpace(_cbEndPostEnabled.Text)) && !string.IsNullOrWhiteSpace(_cfg.EndPostEnabled))
                 _cbEndPostEnabled.SelectedItem = _cfg.EndPostEnabled.Trim();
+
+            if ((_cbRailMode.SelectedItem == null && string.IsNullOrWhiteSpace(_cbRailMode.Text)) && !string.IsNullOrWhiteSpace(_cfg.RailMode))
+                _cbRailMode.SelectedItem = _cfg.RailMode.Trim().ToUpperInvariant();
+
+            SetIfEmpty(_tbRoundRailProfile, _cfg.RoundRailProfile);
+            SetIfEmpty(_tbRoundRailStartOffsetIn, _cfg.RoundRailStartOffsetIn);
+            SetIfEmpty(_tbRoundRailEndOffsetIn, _cfg.RoundRailEndOffsetIn);
+            SetIfEmpty(_tbRoundRailFromTopIn, _cfg.RoundRailFromTopIn);
+            SetIfEmpty(_tbRoundRailCount, _cfg.RoundRailCount);
+            SetIfEmpty(_tbRoundRailSpacingIn, _cfg.RoundRailSpacingIn);
         }
 
         private void FormatAllDistances()
@@ -398,7 +444,7 @@ namespace WDRailing
             Fmt(_tbDeckEdgeIn, true);
             Fmt(_tbRailStartOffsetIn, true);
             Fmt(_tbRailEndOffsetIn, true);
-            Fmt(_tbRailFromTopIn, false);
+            Fmt(_tbRailFromTopIn, true);
             Fmt(_tbRailSpacingIn, false);
 
             Fmt(_tbSeatHoleLineIn, false);
@@ -410,6 +456,11 @@ namespace WDRailing
             Fmt(_tbSeatPilotC2CIn, false);
             Fmt(_tbSeatPilotDiaIn, false);
             Fmt(_tbSeatPilotCutLenIn, false);
+
+            Fmt(_tbRoundRailStartOffsetIn, true);
+            Fmt(_tbRoundRailEndOffsetIn, true);
+            Fmt(_tbRoundRailFromTopIn, true);
+            Fmt(_tbRoundRailSpacingIn, false);
         }
 
         private void HookFmt(TextBox tb, bool allowNeg) => tb.Leave += (s, e) => Fmt(tb, allowNeg);
@@ -417,36 +468,44 @@ namespace WDRailing
         private void Fmt(TextBox tb, bool allowNeg)
         {
             if (tb == null) return;
-            if (string.IsNullOrWhiteSpace(tb.Text)) return;
+
+            string raw = tb.Text;
+            if (string.IsNullOrWhiteSpace(raw)) return;
+
+            string s = raw.Trim();
+
+            // IMPORTANT:
+            // Only auto-format plain numeric input like:
+            //   2
+            //   -2
+            //   2.75
+            //   -2.75
+            //
+            // Leave real imperial strings alone, such as:
+            //   1'-6"
+            //   2 3/4"
+            //   2"3/4
+            //   -2-3/4"
+            if (!Regex.IsMatch(s, @"^-?\d+(\.\d+)?$"))
+                return;
 
             try
             {
-                // best effort parsing using main parser style not available here; just reuse DistanceFormat formatting on numeric.
-                // If user types Tekla-like, keep as-is if parse fails.
-                double inches;
-                if (!TryParseLooseDistance(tb.Text, out inches, allowNeg)) return;
+                if (!double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double inches) &&
+                    !double.TryParse(s, NumberStyles.Float, CultureInfo.CurrentCulture, out inches))
+                    return;
+
+                if (!allowNeg && inches < 0)
+                    return;
+
                 tb.Text = (inches < 0)
                     ? "-" + DistanceFormat.ToTeklaFeetInches(Math.Abs(inches), 16)
                     : DistanceFormat.ToTeklaFeetInches(inches, 16);
             }
-            catch { }
-        }
-
-        private bool TryParseLooseDistance(string raw, out double inches, bool allowNeg)
-        {
-            inches = 0.0;
-            string s = (raw ?? "").Trim();
-            if (s.Length == 0) return false;
-
-            // very small parser: try numeric directly first
-            double v;
-            if (double.TryParse(s.Replace("\"", "").Replace("'", ""), out v))
+            catch
             {
-                inches = v;
-                if (!allowNeg && inches <= 0) return false;
-                return true;
+                // Leave user text exactly as typed if anything fails.
             }
-            return false;
         }
 
         private static void SetIfEmpty(TextBox tb, string val)

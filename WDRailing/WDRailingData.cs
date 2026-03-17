@@ -94,5 +94,14 @@ namespace WDRailing
         [StructuresField("SPACING_MODE")]
         public string SpacingMode;
 
+        [StructuresField("RAIL_MODE")] public string RailMode;   // SQUARE | ROUND
+
+        [StructuresField("RR_PROFILE")] public string RoundRailProfile;
+        [StructuresField("RR_ST_OFF_IN")] public string RoundRailStartOffsetIn;
+        [StructuresField("RR_END_OFF_IN")] public string RoundRailEndOffsetIn;
+        [StructuresField("RR_TOP_IN")] public string RoundRailFromTopIn;
+        [StructuresField("RR_COUNT")] public string RoundRailCount;
+        [StructuresField("RR_SPACE_IN")] public string RoundRailSpacingIn;
+
     }
 }
