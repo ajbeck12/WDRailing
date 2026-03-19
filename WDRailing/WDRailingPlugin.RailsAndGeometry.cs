@@ -108,6 +108,76 @@ namespace WDRailing
             public Point FacePoint;
             public Vector FaceNormal;
         }
+        private void CreateSquareRailPiecesWithSplices(
+    Point start,
+    Point end,
+    double maxLenMm)
+        {
+            if (start == null || end == null)
+                return;
+
+            Vector v = new Vector(end.X - start.X, end.Y - start.Y, end.Z - start.Z);
+            double len = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+            if (len < 1.0)
+                return;
+
+            if (maxLenMm <= 1.0 || len <= maxLenMm)
+            {
+                CreateSingleSquareRailPiece(start, end);
+                return;
+            }
+
+            Vector dir = new Vector(v.X / len, v.Y / len, v.Z / len);
+            int pieceCount = Math.Max(1, (int)Math.Ceiling(len / maxLenMm));
+            double pieceLen = len / pieceCount;
+
+            Point pieceStart = start;
+
+            for (int i = 1; i <= pieceCount; i++)
+            {
+                bool isLast = (i == pieceCount);
+
+                Point pieceEnd;
+                if (isLast)
+                {
+                    pieceEnd = end;
+                }
+                else
+                {
+                    pieceEnd = new Point(
+                        start.X + dir.X * (pieceLen * i),
+                        start.Y + dir.Y * (pieceLen * i),
+                        start.Z + dir.Z * (pieceLen * i));
+                }
+
+                CreateSingleSquareRailPiece(pieceStart, pieceEnd);
+
+                if (!isLast)
+                    CreateInnerRailSplice(pieceEnd, dir, InchesToMm(4.0));
+
+                pieceStart = pieceEnd;
+            }
+        }
+
+        private Beam CreateSingleSquareRailPiece(Point start, Point end)
+        {
+            Beam rail = new Beam(start, end);
+
+            rail.Profile.ProfileString = "TS1-1/2X1-1/2X.188";
+            rail.Material.MaterialString = "A50";
+            rail.Class = "1";
+            rail.Name = "CL11 HORIZ";
+
+            rail.Position.Plane = Position.PlaneEnum.MIDDLE;
+            rail.Position.Depth = Position.DepthEnum.MIDDLE;
+            rail.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!rail.Insert())
+                return null;
+
+            rail.Modify();
+            return rail;
+        }
 
         // Multi-side rail builder:
         //  - avoids corner clipping by trimming/extending the butt side start to the previous side face.
@@ -130,7 +200,8 @@ namespace WDRailing
     bool startLoopEnabled,
     bool[] startLoopMask,
     bool endLoopEnabled,
-    bool[] endLoopMask)
+    bool[] endLoopMask,
+    double railMaxLenMm)
         {
             if (sides == null || sides.Count == 0 || railCount <= 0) return;
 
@@ -138,7 +209,9 @@ namespace WDRailing
             const string railMaterial = "A53";
             const string railClass = "1";
             const string railName = "RAIL";
-            double maxLenMm = InchesToMm(240.0); // 20'-0"
+            double maxLenMm = railMaxLenMm;
+            if (maxLenMm <= 1.0)
+                maxLenMm = InchesToMm(240.0); // fallback
 
             double halfRailWidthMm = InchesToMm(1.5) * 0.5;
             if (TryGetOutsideDimMm(railProfile, out var railOutsideMm))
@@ -373,7 +446,15 @@ namespace WDRailing
                 {
                     if (Distance3D(starts[i], ends[i]) < 1.0) continue;
 
-                    var pieces = CreateRailPiecesCollect(starts[i], ends[i], maxLenMm, railProfile, railMaterial, railClass, railName);
+                    var pieces = CreateRailPiecesCollect(
+                        starts[i],
+                        ends[i],
+                        maxLenMm,
+                        railProfile,
+                        railMaterial,
+                        railClass,
+                        railName,
+                        true);
                     if (pieces.Count > 0)
                     {
                         firstPieceBySide[i] = pieces[0];
@@ -837,6 +918,593 @@ namespace WDRailing
             return true;
         }
 
+        private Beam CreateRoundCornerCl11(Point start, Point end)
+        {
+            if (start == null || end == null)
+                return null;
+
+            Beam rail = new Beam(start, end);
+
+            rail.Profile.ProfileString = "TS1-1/2X1-1/2X.188";
+            rail.Material.MaterialString = "A50";
+            rail.Class = "1";
+            rail.Name = "ROUND CORNER CL11";
+
+            rail.Position.Plane = Position.PlaneEnum.MIDDLE;
+            rail.Position.Depth = Position.DepthEnum.MIDDLE;
+
+            // Square tube, so rotation usually won't matter much geometrically,
+            // but FRONT is a reasonable "turned on side" choice.
+            rail.Position.Rotation = Position.RotationEnum.FRONT;
+
+            if (!rail.Insert())
+                return null;
+
+            rail.Modify();
+            return rail;
+        }
+
+        private void CreateRoundEndLoopsForPolyline(
+    List<RailSideSpec> sides,
+    RoundTerminalRailRefs terminalRefs,
+    double railStartOffsetMm,
+    double railEndOffsetMm,
+    double railFromTopMm,
+    int railCount,
+    double railSpacingMm,
+    bool startLoopEnabled,
+    bool endLoopEnabled)
+        {
+            if (sides == null || sides.Count == 0 || railCount < 2)
+                return;
+
+            if (startLoopEnabled)
+                CreateSingleRoundTerminalEndLoop(
+                    sides[0],
+                    terminalRefs != null ? terminalRefs.StartRailByRow : null,
+                    atStart: true,
+                    railStartOffsetMm: railStartOffsetMm,
+                    railEndOffsetMm: railEndOffsetMm,
+                    railFromTopMm: railFromTopMm,
+                    railCount: railCount,
+                    railSpacingMm: railSpacingMm);
+
+            if (endLoopEnabled)
+                CreateSingleRoundTerminalEndLoop(
+                    sides[sides.Count - 1],
+                    terminalRefs != null ? terminalRefs.EndRailByRow : null,
+                    atStart: false,
+                    railStartOffsetMm: railStartOffsetMm,
+                    railEndOffsetMm: railEndOffsetMm,
+                    railFromTopMm: railFromTopMm,
+                    railCount: railCount,
+                    railSpacingMm: railSpacingMm);
+        }
+
+        private Beam CreateRailSplice(
+    Point center,
+    Vector axisDir,
+    double totalLenMm)
+        {
+            if (center == null || axisDir == null || totalLenMm <= 0.0)
+                return null;
+
+            Vector u;
+            if (Math.Abs(axisDir.Z) > 0.999)
+                u = new Vector(0.0, 0.0, Math.Sign(axisDir.Z) == 0 ? 1.0 : Math.Sign(axisDir.Z));
+            else
+                u = GetDirXYUnit(axisDir);
+
+            double halfLen = totalLenMm * 0.5;
+
+            Point start = new Point(
+                center.X - u.X * halfLen,
+                center.Y - u.Y * halfLen,
+                center.Z - u.Z * halfLen);
+
+            Point end = new Point(
+                center.X + u.X * halfLen,
+                center.Y + u.Y * halfLen,
+                center.Z + u.Z * halfLen);
+
+            Beam splice = new Beam(start, end);
+
+            splice.Profile.ProfileString = "PD47.625*3.175";
+            splice.Material.MaterialString = "A36";
+            splice.Class = "1";
+            splice.Name = "RAIL SPLICE";
+
+            splice.Position.Plane = Position.PlaneEnum.MIDDLE;
+            splice.Position.Depth = Position.DepthEnum.MIDDLE;
+            splice.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!splice.Insert())
+                return null;
+
+            splice.Modify();
+            return splice;
+        }
+
+        private void CreateSingleRoundTerminalEndLoop(
+    RailSideSpec side,
+    Beam[] straightRailsByRow,
+    bool atStart,
+    double railStartOffsetMm,
+    double railEndOffsetMm,
+    double railFromTopMm,
+    int railCount,
+    double railSpacingMm)
+        {
+            if (side == null || railCount < 2)
+                return;
+
+            double cl11LegMm = InchesToMm(10.25);
+            double spliceLenMm = InchesToMm(4.0);
+            double teeVerticalSpliceLenMm = InchesToMm(8.0);
+
+            // RAIL SPLICE OD = 1-7/8
+            double spliceOdMm = InchesToMm(1.875);
+
+            Vector railDir = GetDirXYUnit(side.Dir);
+            if (railDir == null)
+                return;
+
+            Vector inwardDir = atStart
+                ? new Vector(railDir.X, railDir.Y, 0.0)
+                : new Vector(-railDir.X, -railDir.Y, 0.0);
+
+            Vector upDir = new Vector(0.0, 0.0, 1.0);
+
+            double along = atStart ? -railStartOffsetMm : railEndOffsetMm;
+            Point onLine = atStart ? side.StartOnLine : side.EndOnLine;
+            double lateral = side.PostLineLateralMm;
+
+            Point topCorner = GetRoundTerminalRowPoint(
+                side, onLine, along, lateral, railFromTopMm, railSpacingMm, 0);
+
+            Point botCorner = GetRoundTerminalRowPoint(
+                side, onLine, along, lateral, railFromTopMm, railSpacingMm, railCount - 1);
+
+            Point topRailJoint = new Point(
+                topCorner.X + inwardDir.X * cl11LegMm,
+                topCorner.Y + inwardDir.Y * cl11LegMm,
+                topCorner.Z);
+
+            Point botRailJoint = new Point(
+                botCorner.X + inwardDir.X * cl11LegMm,
+                botCorner.Y + inwardDir.Y * cl11LegMm,
+                botCorner.Z);
+
+            double topVerticalDropMm = (railCount >= 3) ? railSpacingMm : cl11LegMm;
+            double botVerticalRiseMm = (railCount >= 3) ? railSpacingMm : cl11LegMm;
+
+            Point topVerticalEnd = new Point(
+                topCorner.X,
+                topCorner.Y,
+                topCorner.Z - topVerticalDropMm);
+
+            Point botVerticalEnd = new Point(
+                botCorner.X,
+                botCorner.Y,
+                botCorner.Z + botVerticalRiseMm);
+
+            PolyBeam topLoop = CreateCl11PolyBeam(topRailJoint, topCorner, topVerticalEnd);
+            PolyBeam botLoop = CreateCl11PolyBeam(botRailJoint, botCorner, botVerticalEnd);
+
+            Beam topSplice = CreateRailSplice(topRailJoint, inwardDir, spliceLenMm);
+            Beam botSplice = CreateRailSplice(botRailJoint, inwardDir, spliceLenMm);
+
+            if (topLoop != null &&
+                topSplice != null &&
+                straightRailsByRow != null &&
+                straightRailsByRow.Length > 0 &&
+                straightRailsByRow[0] != null)
+            {
+                TryCreateRoundSpliceBolts(
+                    straightRailsByRow[0],
+                    topSplice,
+                    topLoop,
+                    topRailJoint);
+            }
+
+            if (botLoop != null &&
+                botSplice != null &&
+                straightRailsByRow != null &&
+                straightRailsByRow.Length > (railCount - 1) &&
+                straightRailsByRow[railCount - 1] != null)
+            {
+                TryCreateRoundSpliceBolts(
+                    straightRailsByRow[railCount - 1],
+                    botSplice,
+                    botLoop,
+                    botRailJoint);
+            }
+
+            if (railCount == 2)
+            {
+                Point mid = new Point(
+                    topCorner.X,
+                    topCorner.Y,
+                    (topVerticalEnd.Z + botVerticalEnd.Z) * 0.5);
+
+                Beam midSplice = CreateRailSplice(mid, upDir, spliceLenMm);
+
+                if (midSplice != null && topLoop != null && botLoop != null)
+                {
+                    TryCreateRoundTSpliceBolts(
+                        topLoop,
+                        midSplice,
+                        botLoop,
+                        mid);
+                }
+
+                return;
+            }
+
+            var middleTeeNodes = new List<Point>();
+            var verticalSpliceByRow = new Beam[railCount];
+            var verticalLoopRails = new List<Beam>();
+
+            for (int row = 1; row < railCount - 1; row++)
+            {
+                Point teeNode = GetRoundTerminalRowPoint(
+                    side, onLine, along, lateral, railFromTopMm, railSpacingMm, row);
+
+                middleTeeNodes.Add(teeNode);
+
+                // Vertical tee splice
+                Beam verticalSplice = CreateRailSplice(teeNode, upDir, teeVerticalSpliceLenMm);
+                verticalSpliceByRow[row] = verticalSplice;
+
+                Beam rowRail = null;
+                if (straightRailsByRow != null && row >= 0 && row < straightRailsByRow.Length)
+                    rowRail = straightRailsByRow[row];
+
+                // Horizontal pipe + end splice
+                CreateRoundTeeHorizontalPipeAndEndSplice(
+                    teeNode,
+                    inwardDir,
+                    spliceLenMm,
+                    teeVerticalSpliceLenMm,
+                    spliceOdMm,
+                    verticalSplice,
+                    rowRail);
+            }
+
+            // For 4+ rails, add the vertical tube segments between the T splice nodes.
+            if (railCount >= 4)
+            {
+                for (int i = 0; i < middleTeeNodes.Count - 1; i++)
+                {
+                    Beam vert = CreateRoundVerticalLoopRail(
+                        middleTeeNodes[i],
+                        middleTeeNodes[i + 1]);
+
+                    verticalLoopRails.Add(vert);
+                }
+            }
+
+            // Add bolts to the vertical T splices
+            for (int row = 1; row < railCount - 1; row++)
+            {
+                Beam verticalSplice = verticalSpliceByRow[row];
+                if (verticalSplice == null)
+                    continue;
+
+                Part upperPart;
+                if (row == 1)
+                    upperPart = topLoop;
+                else
+                    upperPart = verticalLoopRails[row - 2];
+
+                Part lowerPart;
+                if (row == railCount - 2)
+                    lowerPart = botLoop;
+                else
+                    lowerPart = verticalLoopRails[row - 1];
+
+                if (upperPart != null && lowerPart != null)
+                {
+                    TryCreateRoundTSpliceBolts(
+                        upperPart,
+                        verticalSplice,
+                        lowerPart,
+                        middleTeeNodes[row - 1]);
+                }
+            }
+        }
+
+        private Beam CreateRoundVerticalLoopRail(Point start, Point end)
+        {
+            if (start == null || end == null)
+                return null;
+
+            Beam rail = new Beam(start, end);
+
+            rail.Profile.ProfileString = "PIPE1-1/2X14GA";
+            rail.Material.MaterialString = "A53";
+            rail.Class = "1";
+            rail.Name = "CL11 VERT";
+
+            rail.Position.Plane = Position.PlaneEnum.MIDDLE;
+            rail.Position.Depth = Position.DepthEnum.MIDDLE;
+            rail.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!rail.Insert())
+                return null;
+
+            rail.Modify();
+            return rail;
+        }
+
+        private void CreateRoundTeeHorizontalPipeAndEndSplice(
+            Point teeNode,
+            Vector inwardDir,
+            double endSpliceLenMm,
+            double copeCutLenMm,
+            double verticalSpliceOdMm,
+            Beam verticalSplice,
+            Beam straightRailPart)
+        {
+            if (teeNode == null || inwardDir == null)
+                return;
+
+            Vector u = GetDirXYUnit(inwardDir);
+            if (u == null)
+                return;
+
+            // Pipe starts 5/8" inward from vertical splice center
+            double pipeStartOffsetMm = InchesToMm(0.625);
+
+            // Pipe ends 10-1/4" inward from vertical splice center
+            double pipeEndOffsetMm = InchesToMm(10.25);
+
+            Point pipeStart = new Point(
+                teeNode.X + u.X * pipeStartOffsetMm,
+                teeNode.Y + u.Y * pipeStartOffsetMm,
+                teeNode.Z);
+
+            Point pipeEnd = new Point(
+                teeNode.X + u.X * pipeEndOffsetMm,
+                teeNode.Y + u.Y * pipeEndOffsetMm,
+                teeNode.Z);
+
+            Beam pipe = new Beam(pipeStart, pipeEnd);
+            pipe.Profile.ProfileString = "PIPE1-1/2X14GA";
+            pipe.Material.MaterialString = "A53";
+            pipe.Class = "1";
+            pipe.Name = "CL11 HORIZ";
+
+            pipe.Position.Plane = Position.PlaneEnum.MIDDLE;
+            pipe.Position.Depth = Position.DepthEnum.MIDDLE;
+            pipe.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!pipe.Insert())
+                return;
+
+            pipe.Modify();
+
+            // Add weld between the horizontal pipe and the 8" vertical splice
+            if (verticalSplice != null)
+                CreateSimpleShopFilletWeld(verticalSplice, pipe, InchesToMm(0.125));
+
+            // Cope the horizontal pipe around the vertical splice
+            CreateRoundPipeCopeCut(pipe, teeNode, verticalSpliceOdMm, copeCutLenMm);
+
+            // Then add the normal 4" splice at the far end
+            Beam endSplice = CreateRailSplice(pipeEnd, u, endSpliceLenMm);
+
+            if (endSplice != null && straightRailPart != null)
+            {
+                TryCreateRoundSpliceBolts(
+                    pipe,
+                    endSplice,
+                    straightRailPart,
+                    pipeEnd);
+            }
+        }
+
+        private bool CreateSimpleShopFilletWeld(Part mainPart, Part secondaryPart, double sizeMm)
+        {
+            if (mainPart == null || secondaryPart == null || sizeMm <= 0.0)
+                return false;
+
+            Weld weld = new Weld();
+            weld.MainObject = mainPart;
+            weld.SecondaryObject = secondaryPart;
+            weld.ShopWeld = true;
+            weld.ConnectAssemblies = false;
+            weld.AroundWeld = false;
+
+            weld.SizeAbove = sizeMm;
+            weld.SizeBelow = sizeMm;
+
+            weld.TypeAbove = BaseWeld.WeldTypeEnum.WELD_TYPE_FILLET;
+            weld.TypeBelow = BaseWeld.WeldTypeEnum.WELD_TYPE_FILLET;
+
+            return weld.Insert();
+        }
+
+        private bool CreateRoundPipeCopeCut(
+    Beam father,
+    Point center,
+    double cutDiameterMm,
+    double cutLengthMm)
+        {
+            if (father == null || center == null || cutDiameterMm <= 0.0 || cutLengthMm <= 0.0)
+                return false;
+
+            double halfLenMm = cutLengthMm * 0.5;
+
+            Point start = new Point(center.X, center.Y, center.Z - halfLenMm);
+            Point end = new Point(center.X, center.Y, center.Z + halfLenMm);
+
+            Beam operative = new Beam(start, end);
+            operative.Profile.ProfileString = MakeMetricRoundProfileString(cutDiameterMm);
+            operative.Material.MaterialString = "A36";
+            operative.Class = BooleanPart.BooleanOperativeClassName;
+            operative.Name = "ROUND PIPE COPE";
+
+            operative.Position.Plane = Position.PlaneEnum.MIDDLE;
+            operative.Position.Depth = Position.DepthEnum.MIDDLE;
+            operative.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!operative.Insert())
+                return false;
+
+            BooleanPart cut = new BooleanPart();
+            cut.Father = father;
+            cut.Type = BooleanPart.BooleanTypeEnum.BOOLEAN_CUT;
+
+            if (!cut.SetOperativePart(operative))
+            {
+                operative.Delete();
+                return false;
+            }
+
+            if (!cut.Insert())
+            {
+                operative.Delete();
+                return false;
+            }
+
+            father.Modify();
+            operative.Delete();
+            return true;
+        }
+
+        private bool CreateRoundSpliceCopeCut(Beam father, Point center, double cutDiameterMm)
+        {
+            if (father == null || center == null || cutDiameterMm <= 0.0)
+                return false;
+
+            double halfLenMm = Math.Max(cutDiameterMm, InchesToMm(4.0));
+
+            Point start = new Point(center.X, center.Y, center.Z - halfLenMm);
+            Point end = new Point(center.X, center.Y, center.Z + halfLenMm);
+
+            Beam operative = new Beam(start, end);
+            operative.Profile.ProfileString = MakeMetricRoundProfileString(cutDiameterMm);
+            operative.Material.MaterialString = "A36";
+            operative.Class = BooleanPart.BooleanOperativeClassName;
+            operative.Name = "ROUND SPLICE COPE";
+
+            operative.Position.Plane = Position.PlaneEnum.MIDDLE;
+            operative.Position.Depth = Position.DepthEnum.MIDDLE;
+            operative.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!operative.Insert())
+                return false;
+
+            BooleanPart cut = new BooleanPart();
+            cut.Father = father;
+            cut.Type = BooleanPart.BooleanTypeEnum.BOOLEAN_CUT;
+
+            if (!cut.SetOperativePart(operative))
+            {
+                operative.Delete();
+                return false;
+            }
+
+            if (!cut.Insert())
+            {
+                operative.Delete();
+                return false;
+            }
+
+            father.Modify();
+            operative.Delete();
+            return true;
+        }
+
+        private static string MakeMetricRoundProfileString(double diameterMm)
+        {
+            return "D" + diameterMm.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        private Point GetRoundTerminalRowPoint(
+            RailSideSpec side,
+            Point onLine,
+            double along,
+            double lateral,
+            double railFromTopMm,
+            double railSpacingMm,
+            int row)
+        {
+            Vector dirXY = GetDirXYUnit(side.Dir);
+
+            return new Point(
+                onLine.X + dirXY.X * along + side.Left.X * lateral,
+                onLine.Y + dirXY.Y * along + side.Left.Y * lateral,
+                side.FirstPostTopZ - railFromTopMm - (row * railSpacingMm));
+        }
+
+        private PolyBeam CreateCl11PolyBeam(
+    Point railEndPoint,
+    Point bendCornerPoint,
+    Point verticalEndPoint)
+        {
+            if (railEndPoint == null || bendCornerPoint == null || verticalEndPoint == null)
+                return null;
+
+            PolyBeam pb = new PolyBeam();
+
+            pb.Profile.ProfileString = "PIPE1-1/2X14GA";
+            pb.Material.MaterialString = "A53";
+            pb.Class = "1";
+            pb.Name = "CL11";
+
+            pb.Position.Plane = Position.PlaneEnum.MIDDLE;
+            pb.Position.Depth = Position.DepthEnum.MIDDLE;
+            pb.Position.Rotation = Position.RotationEnum.TOP;
+
+            double bendRadiusMm = InchesToMm(3.5);
+            Chamfer bendChamfer = new Chamfer(bendRadiusMm, 0.0, Chamfer.ChamferTypeEnum.CHAMFER_ROUNDING);
+
+            pb.AddContourPoint(new ContourPoint(railEndPoint, null));
+            pb.AddContourPoint(new ContourPoint(bendCornerPoint, bendChamfer));
+            pb.AddContourPoint(new ContourPoint(verticalEndPoint, null));
+
+            if (!pb.Insert())
+                return null;
+
+            pb.Modify();
+            return pb;
+        }
+
+        private static bool TryGetRoundOutsideDimMm(string profile, out double outsideMm)
+        {
+            outsideMm = 0.0;
+            if (string.IsNullOrWhiteSpace(profile))
+                return false;
+
+            string s = profile.Trim().ToUpperInvariant().Replace(" ", "");
+
+            // D44.45
+            Match mDirect = Regex.Match(s, @"^D([0-9]+(?:\.[0-9]+)?)$");
+            if (mDirect.Success)
+            {
+                if (double.TryParse(mDirect.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out outsideMm))
+                    return outsideMm > 0.001;
+            }
+
+            // PIPE1-1/2X14GA  -> use first dimension as OD
+            if (s.StartsWith("PIPE"))
+                s = s.Substring(4);
+
+            string[] dims = s.Split(new[] { 'X' }, StringSplitOptions.RemoveEmptyEntries);
+            if (dims.Length >= 1)
+            {
+                if (TryParseProfileDimInches(dims[0], out double odIn))
+                {
+                    outsideMm = InchesToMm(odIn);
+                    return outsideMm > 0.001;
+                }
+            }
+
+            return false;
+        }
+
         private static ContourPlate CreateRailEndCap(Point endCenter, Vector endDir, double halfRailWidthMm)
         {
             try
@@ -886,17 +1554,29 @@ namespace WDRailing
         }
 
 
-        private static List<Beam> CreateRailPiecesCollect(
-            Point a, Point b, double maxLenMm,
-            string profile, string material, string cls, string name)
+        private List<Beam> CreateRailPiecesCollect(
+            Point a,
+            Point b,
+            double maxLenMm,
+            string profile,
+            string material,
+            string cls,
+            string name,
+            bool useInnerSplice)
         {
             var outPieces = new List<Beam>();
 
             Vector v = new Vector(b.X - a.X, b.Y - a.Y, b.Z - a.Z);
             double total = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
-            if (total < 1.0) return outPieces;
+            if (total < 1.0)
+                return outPieces;
+
+            if (maxLenMm <= 1.0)
+                maxLenMm = total;
 
             int pieces = Math.Max(1, (int)Math.Ceiling(total / maxLenMm));
+
+            Vector dir = new Vector(v.X / total, v.Y / total, v.Z / total);
 
             for (int i = 0; i < pieces; i++)
             {
@@ -918,6 +1598,17 @@ namespace WDRailing
 
                 if (rail.Insert())
                     outPieces.Add(rail);
+
+                // Add splice at each internal break point
+                if (i < pieces - 1)
+                {
+                    Point splicePoint = p1;
+
+                    if (useInnerSplice)
+                        CreateInnerRailSplice(splicePoint, dir, InchesToMm(4.0));
+                    else
+                        CreateRailSplice(splicePoint, dir, InchesToMm(4.0));
+                }
             }
 
             return outPieces;
@@ -1046,6 +1737,49 @@ namespace WDRailing
             return cls.ToString(CultureInfo.InvariantCulture);
         }
 
+        private Beam CreateInnerRailSplice(Point center, Vector dir, double spliceLenMm)
+        {
+            if (center == null || dir == null || spliceLenMm <= 0.0)
+                return null;
+
+            Vector dirUnit = GetDirXYUnit(dir);
+            if (dirUnit == null)
+                return null;
+
+            double halfLen = spliceLenMm * 0.5;
+
+            Point start = new Point(
+                center.X - dirUnit.X * halfLen,
+                center.Y - dirUnit.Y * halfLen,
+                center.Z - dirUnit.Z * halfLen);
+
+            Point end = new Point(
+                center.X + dirUnit.X * halfLen,
+                center.Y + dirUnit.Y * halfLen,
+                center.Z + dirUnit.Z * halfLen);
+
+            Beam splice = new Beam(start, end);
+
+            splice.Profile.ProfileString = "TS1-1/4X1-1/4X11 GA";
+            splice.Material.MaterialString = "A50";
+            splice.Class = "1";
+            splice.Name = "INNER RAIL SPLICE";
+
+            splice.PartNumber.Prefix = "SP1";
+            splice.PartNumber.StartNumber = 0;
+            splice.AssemblyNumber.Prefix = "SP1";
+            splice.AssemblyNumber.StartNumber = 0;
+
+            splice.Position.Plane = Position.PlaneEnum.MIDDLE;
+            splice.Position.Depth = Position.DepthEnum.MIDDLE;
+            splice.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!splice.Insert())
+                return null;
+
+            splice.Modify();
+            return splice;
+        }
 
         private static double Distance3D(Point a, Point b)
         {
@@ -1325,7 +2059,7 @@ namespace WDRailing
             return sideSign * halfPostWidthMm;
         }
 
-        private void CreateRoundPostRpc(
+        private Brep CreateRoundPostRpc(
     Point postTopCenter,
     Vector left,
     Point stationOnLine,
@@ -1334,21 +2068,17 @@ namespace WDRailing
     double halfPostWidthMm)
         {
             if (postTopCenter == null)
-                return;
+                return null;
 
             double riseMm = InchesToMm(1.25);
 
-            // Start point = centered on post, 1-1/4" above top of post.
             Point start = new Point(
                 postTopCenter.X,
                 postTopCenter.Y,
                 postTopCenter.Z - riseMm);
 
-            // Face the same side as the seat angle / host side.
             int faceSign = ResolveRpcFacingSign(left, stationOnLine, nearestHost, segPostLateralMm);
 
-            // End point = on outside face of post, same elevation as start,
-            // pointing toward the framing/reference-line side.
             Point end = new Point(
                 start.X + left.X * (faceSign * halfPostWidthMm),
                 start.Y + left.Y * (faceSign * halfPostWidthMm),
@@ -1371,10 +2101,11 @@ namespace WDRailing
             if (!rpc.Insert())
             {
                 Operation.DisplayPrompt("WDRailing: failed to insert RPC item.");
-                return;
+                return null;
             }
 
             rpc.Modify();
+            return rpc;
         }
 
         private static int ResolveRpcFacingSign(

@@ -70,6 +70,10 @@ namespace WDRailing
         public string RoundRailFromTopIn { get; private set; }
         public string RoundRailCount { get; private set; }
         public string RoundRailSpacingIn { get; private set; }
+        public string RoundStartLoopEnabled { get; private set; }
+        public string RoundEndLoopEnabled { get; private set; }
+        public string RailMaxLenIn { get; private set; }
+        public string RoundRailMaxLenIn { get; private set; }
 
         public static string GetConfigPath()
         {
@@ -141,6 +145,10 @@ namespace WDRailing
                 RoundRailFromTopIn = GetOrDefault(kv, "RoundRailFromTopIn", "3"),
                 RoundRailCount = GetOrDefault(kv, "RoundRailCount", "2"),
                 RoundRailSpacingIn = GetOrDefault(kv, "RoundRailSpacingIn", "21"),
+                RoundStartLoopEnabled = GetOrDefault(kv, "RoundStartLoopEnabled", "1"),
+                RoundEndLoopEnabled = GetOrDefault(kv, "RoundEndLoopEnabled", "1"),
+                RailMaxLenIn = GetOrDefault(kv, "RailMaxLenIn", "240"),
+                RoundRailMaxLenIn = GetOrDefault(kv, "RoundRailMaxLenIn", "240"),
 
             };
 

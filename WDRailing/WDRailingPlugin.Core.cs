@@ -79,7 +79,10 @@ namespace WDRailing
             if (string.IsNullOrWhiteSpace(_data.RoundRailFromTopIn)) _data.RoundRailFromTopIn = cfg.RoundRailFromTopIn;
             if (string.IsNullOrWhiteSpace(_data.RoundRailCount)) _data.RoundRailCount = cfg.RoundRailCount;
             if (string.IsNullOrWhiteSpace(_data.RoundRailSpacingIn)) _data.RoundRailSpacingIn = cfg.RoundRailSpacingIn;
-
+            if (string.IsNullOrWhiteSpace(_data.RoundStartLoopEnabled)) _data.RoundStartLoopEnabled = cfg.RoundStartLoopEnabled;
+            if (string.IsNullOrWhiteSpace(_data.RoundEndLoopEnabled)) _data.RoundEndLoopEnabled = cfg.RoundEndLoopEnabled;
+            if (string.IsNullOrWhiteSpace(_data.RailMaxLenIn)) _data.RailMaxLenIn = cfg.RailMaxLenIn;
+            if (string.IsNullOrWhiteSpace(_data.RoundRailMaxLenIn)) _data.RoundRailMaxLenIn = cfg.RoundRailMaxLenIn;
         }
 
 
@@ -402,6 +405,27 @@ namespace WDRailing
                 _data.StartPostEnabled = startPostEnabledRaw;
                 _data.EndPostEnabled = endPostEnabledRaw;
 
+                string roundStartLoopEnabledRaw = (string.IsNullOrWhiteSpace(_data.RoundStartLoopEnabled) ? cfg.RoundStartLoopEnabled : _data.RoundStartLoopEnabled).Trim();
+                if (roundStartLoopEnabledRaw != "0" && roundStartLoopEnabledRaw != "1")
+                    throw new InvalidDataException("ROUND_START_LOOP_ENABLED must be 0 or 1. Got: " + roundStartLoopEnabledRaw);
+                bool roundStartLoopEnabled = (roundStartLoopEnabledRaw == "1");
+
+                string roundEndLoopEnabledRaw = (string.IsNullOrWhiteSpace(_data.RoundEndLoopEnabled) ? cfg.RoundEndLoopEnabled : _data.RoundEndLoopEnabled).Trim();
+                if (roundEndLoopEnabledRaw != "0" && roundEndLoopEnabledRaw != "1")
+                    throw new InvalidDataException("ROUND_END_LOOP_ENABLED must be 0 or 1. Got: " + roundEndLoopEnabledRaw);
+                bool roundEndLoopEnabled = (roundEndLoopEnabledRaw == "1");
+
+                _data.RoundStartLoopEnabled = roundStartLoopEnabledRaw;
+                _data.RoundEndLoopEnabled = roundEndLoopEnabledRaw;
+
+                double railMaxLenIn = ParseImperialInchesOrThrow(
+    string.IsNullOrWhiteSpace(_data.RailMaxLenIn) ? cfg.RailMaxLenIn : _data.RailMaxLenIn,
+    allowNegative: false);
+
+                double roundRailMaxLenIn = ParseImperialInchesOrThrow(
+    string.IsNullOrWhiteSpace(_data.RoundRailMaxLenIn) ? cfg.RoundRailMaxLenIn : _data.RoundRailMaxLenIn,
+    allowNegative: false);
+
                 // Persist effective values
                 if (spacingModeRaw == "AUTOMATIC" || spacingModeRaw == "MAX")
                     _data.SpacingIn = DistanceFormat.ToTeklaFeetInches(spacingIn, 16);
@@ -451,6 +475,8 @@ namespace WDRailing
                 _data.RoundRailFromTopIn = (roundRailFromTopIn < 0 ? "-" : "") + DistanceFormat.ToTeklaFeetInches(Math.Abs(roundRailFromTopIn), 16);
                 _data.RoundRailCount = roundRailCount.ToString(CultureInfo.InvariantCulture);
                 _data.RoundRailSpacingIn = DistanceFormat.ToTeklaFeetInches(roundRailSpacingIn, 16);
+                _data.RailMaxLenIn = DistanceFormat.ToTeklaFeetInches(railMaxLenIn, 16);
+                _data.RoundRailMaxLenIn = DistanceFormat.ToTeklaFeetInches(roundRailMaxLenIn, 16);
 
                 // ===================== Convert to mm =====================
                 double spacingMm = InchesToMm(spacingIn);
@@ -466,6 +492,8 @@ namespace WDRailing
                 double roundRailEndOffsetMm = InchesToMm(roundRailEndIn);
                 double roundRailFromTopMm = InchesToMm(roundRailFromTopIn);
                 double roundRailSpacingMm = InchesToMm(roundRailSpacingIn);
+                double railMaxLenMm = InchesToMm(railMaxLenIn);
+                double roundRailMaxLenMm = InchesToMm(roundRailMaxLenIn);
 
                 // Half-width for face-based offsets (best effort)
                 double halfPostWidthMm = 0.0;
@@ -635,7 +663,7 @@ namespace WDRailing
 
                         if (railModeRaw == "ROUND")
                         {
-                            CreateRoundPostRpc(
+                            Brep rpcObj = CreateRoundPostRpc(
                                 postEnd,
                                 left,
                                 stationOnLine,
@@ -643,9 +671,32 @@ namespace WDRailing
                                 segPostLateralMm,
                                 halfPostWidthMm);
 
+                            int rpcFaceSign = ResolveRpcFacingSign(left, stationOnLine, nearestHost, segPostLateralMm);
+
+                            Vector rpcBoltDir = new Vector(
+                                left.X * rpcFaceSign,
+                                left.Y * rpcFaceSign,
+                                0.0);
+
+                            // NEW: RPC-to-post bolt
+                            if (rpcObj != null)
+                            {
+                                Point rpcPostBoltCenter = new Point(
+                                    postStart.X,
+                                    postStart.Y,
+                                    postEnd.Z - InchesToMm(0.625));   // 3/4" down from top of post
+
+                                TryCreateRoundRpcPostBolt(
+                                    postObj,
+                                    rpcObj,
+                                    rpcPostBoltCenter,
+                                    dir,
+                                    rpcBoltDir);
+                            }
+
                             if (railEnabled && roundRailCount > 0)
                             {
-                                CreateRoundRailSleevesAndCutsAtPost(
+                                Beam topRowSleeve = CreateRoundRailSleevesAndCutsAtPost(
                                     postObj,
                                     postStart,
                                     postEnd,
@@ -658,11 +709,67 @@ namespace WDRailing
                                     ref sleeveFail,
                                     ref cutOk,
                                     ref cutFail);
+
+                                if (rpcObj != null && topRowSleeve != null)
+                                {
+                                    Point topRowBoltCenter = new Point(
+                                        postStart.X,
+                                        postStart.Y,
+                                        postEnd.Z - roundRailFromTopMm);
+
+                                    TryCreateRoundRpcTopRailBolt(
+                                        topRowSleeve,
+                                        rpcObj,
+                                        topRowBoltCenter,
+                                        rpcBoltDir);
+                                }
                             }
                         }
                         else
                         {
                             CreatePostCap(postObj);
+
+                            if (railEnabled && railCount > 0)
+                            {
+                                // Regular post seat angles should be independent from corner-seat logic.
+                                // Keep creating these at every post (including posts next to corners).
+                                int seatSideSign = DetermineConnectionSideSign(left, stationOnLine, nearestHost);
+                                if (seatSideSign == 0) seatSideSign = +1;
+
+                                Vector dirXY = GetDirXYUnit(dir);
+
+                                for (int r = 0; r < railCount; r++)
+                                {
+                                    // Rail centerline Z for this row at THIS post
+                                    double railZ = postEnd.Z - railFromTopMm - (r * railSpacingMm);
+
+                                    double halfRailDepthMm = InchesToMm(1.5) * 0.5;
+                                    if (TryGetOutsideDimMm("TS1-1/2X1-1/2X.188", out var railOutsideMm))
+                                        halfRailDepthMm = railOutsideMm * 0.5;
+
+                                    CreateRailPostSeatAngle(
+                                        stationOnLine,
+                                        dirXY,
+                                        left,
+                                        segPostLateralMm,
+                                        halfPostWidthMm,
+                                        seatSideSign,
+                                        railZ,
+                                        halfRailDepthMm,
+                                        postObj,
+                                        seatHoleLineIn,
+                                        seatSlotC2CIn,
+                                        seatSlotSizeIn,
+                                        seatSlotStandard,
+                                        seatSlotCutLenIn,
+                                        seatSlotSpecial1,
+                                        seatPilotC2CIn,
+                                        seatPilotDiaIn,
+                                        seatPilotStandard,
+                                        seatPilotCutLenIn
+                                    );
+                                }
+                            }
                         }
 
                         bool flipThisPostConnection = connFlipPosts.Contains(globalPostNumber);
@@ -753,7 +860,8 @@ namespace WDRailing
                         startLoopEnabled,
                         startLoopMask,
                         endLoopEnabled,
-                        endLoopMask
+                        endLoopMask,
+                        railMaxLenMm
                     );
 
                     CreateEndLoopsForPolyline(
@@ -772,14 +880,29 @@ namespace WDRailing
 
                 if (railEnabled && railModeRaw == "ROUND" && roundRailCount > 0 && railSideSpecs.Count > 0)
                 {
-                    CreateRoundRailsForPolyline(
+                    RoundTerminalRailRefs roundTerminalRefs = CreateRoundRailsForPolyline(
                         railSideSpecs,
                         roundRailProfile,
                         roundRailStartOffsetMm,
                         roundRailEndOffsetMm,
                         roundRailFromTopMm,
                         roundRailCount,
-                        roundRailSpacingMm
+                        roundRailSpacingMm,
+                        roundStartLoopEnabled,
+                        roundEndLoopEnabled,
+                        roundRailMaxLenMm
+                    );
+
+                    CreateRoundEndLoopsForPolyline(
+                        railSideSpecs,
+                        roundTerminalRefs,
+                        roundRailStartOffsetMm,
+                        roundRailEndOffsetMm,
+                        roundRailFromTopMm,
+                        roundRailCount,
+                        roundRailSpacingMm,
+                        roundStartLoopEnabled,
+                        roundEndLoopEnabled
                     );
                 }
 
@@ -1067,7 +1190,7 @@ namespace WDRailing
             closure.Modify();
         }
 
-        private void CreateRoundRailSleevesAndCutsAtPost(
+        private Beam CreateRoundRailSleevesAndCutsAtPost(
     Beam postObj,
     Point postStart,
     Point postEnd,
@@ -1082,15 +1205,16 @@ namespace WDRailing
     ref int cutFail)
         {
             if (postObj == null || postStart == null || postEnd == null || roundRailCount <= 0)
-                return;
+                return null;
 
             Vector dirXY = GetDirXYUnit(dir);
             if (dirXY == null)
-                return;
+                return null;
 
-            // EXACT post size only
             double sleeveHalfLenMm = halfPostWidthMm;
             double cutHalfLenMm = halfPostWidthMm;
+
+            Beam topRowSleeve = null;
 
             for (int row = 0; row < roundRailCount; row++)
             {
@@ -1098,10 +1222,18 @@ namespace WDRailing
                 Point center = new Point(postStart.X, postStart.Y, z);
 
                 Beam sleeve = CreateRoundRailSleeveInsert(center, dirXY, sleeveHalfLenMm);
-                if (sleeve != null) sleeveOk++;
-                else sleeveFail++;
+                if (sleeve != null)
+                {
+                    sleeveOk++;
 
-                // no cut on top rail row
+                    if (row == 0)
+                        topRowSleeve = sleeve;
+                }
+                else
+                {
+                    sleeveFail++;
+                }
+
                 if (row == 0)
                     continue;
 
@@ -1110,6 +1242,8 @@ namespace WDRailing
                 else
                     cutFail++;
             }
+
+            return topRowSleeve;
         }
 
         private Beam CreateRoundRailSleeveInsert(Point center, Vector dirXY, double halfLenMm)
@@ -1243,25 +1377,38 @@ namespace WDRailing
             return values;
         }
 
-        private void CreateRoundRailsForPolyline(
-            List<RailSideSpec> sides,
-            string roundProfile,
-            double railStartOffsetMm,
-            double railEndOffsetMm,
-            double railFromTopMm,
-            int railCount,
-            double railSpacingMm)
+        private RoundTerminalRailRefs CreateRoundRailsForPolyline(
+    List<RailSideSpec> sides,
+    string roundProfile,
+    double railStartOffsetMm,
+    double railEndOffsetMm,
+    double railFromTopMm,
+    int railCount,
+    double railSpacingMm,
+    bool roundStartLoopEnabled,
+    bool roundEndLoopEnabled,
+    double roundRailMaxLenMm)
         {
             if (sides == null || sides.Count == 0 || railCount <= 0)
-                return;
+                return null;
+
+            var terminalRefs = new RoundTerminalRailRefs
+            {
+                StartRailByRow = new Beam[railCount],
+                EndRailByRow = new Beam[railCount]
+            };
 
             const string railMaterial = "A53";
             const string railClass = "1";
             const string railName = "ROUND RAIL";
 
-            double maxLenMm = InchesToMm(240.0); // 20'-0"
+            int sideCount = sides.Count;
+            double loopLegMm = InchesToMm(10.25); // same leg logic as round end loop
 
-            for (int i = 0; i < sides.Count; i++)
+            Point[] baseStart = new Point[sideCount];
+            Point[] baseEnd = new Point[sideCount];
+
+            for (int i = 0; i < sideCount; i++)
             {
                 RailSideSpec s = sides[i];
 
@@ -1275,24 +1422,347 @@ namespace WDRailing
                     s.EndOnLine.Y + s.Dir.Y * railEndOffsetMm,
                     s.EndOnLine.Z + s.Dir.Z * railEndOffsetMm);
 
-                for (int r = 0; r < railCount; r++)
+                baseStart[i] = new Point(
+                    sLine.X + s.Left.X * s.PostLineLateralMm,
+                    sLine.Y + s.Left.Y * s.PostLineLateralMm,
+                    0.0);
+
+                baseEnd[i] = new Point(
+                    eLine.X + s.Left.X * s.PostLineLateralMm,
+                    eLine.Y + s.Left.Y * s.PostLineLateralMm,
+                    0.0);
+            }
+
+            for (int row = 0; row < railCount; row++)
+            {
+                Point[] starts = new Point[sideCount];
+                Point[] ends = new Point[sideCount];
+
+                for (int i = 0; i < sideCount; i++)
                 {
-                    double zStart = s.FirstPostTopZ - railFromTopMm - (r * railSpacingMm);
-                    double zEnd = s.LastPostTopZ - railFromTopMm - (r * railSpacingMm);
+                    RailSideSpec s = sides[i];
 
-                    Point a = new Point(
-                        sLine.X + s.Left.X * s.PostLineLateralMm,
-                        sLine.Y + s.Left.Y * s.PostLineLateralMm,
-                        zStart);
+                    double zStart = s.FirstPostTopZ - railFromTopMm - (row * railSpacingMm);
+                    double zEnd = s.LastPostTopZ - railFromTopMm - (row * railSpacingMm);
 
-                    Point b = new Point(
-                        eLine.X + s.Left.X * s.PostLineLateralMm,
-                        eLine.Y + s.Left.Y * s.PostLineLateralMm,
-                        zEnd);
+                    starts[i] = new Point(baseStart[i].X, baseStart[i].Y, zStart);
+                    ends[i] = new Point(baseEnd[i].X, baseEnd[i].Y, zEnd);
+                }
 
-                    CreateRailPieces(a, b, maxLenMm, roundProfile, railMaterial, railClass, railName);
+                // open-run terminal loop shortening
+                if (sideCount > 0 && roundStartLoopEnabled)
+                {
+                    Vector d0 = GetDirXYUnit(sides[0].Dir);
+                    starts[0] = new Point(
+                        starts[0].X + d0.X * loopLegMm,
+                        starts[0].Y + d0.Y * loopLegMm,
+                        starts[0].Z);
+                }
+
+                if (sideCount > 0 && roundEndLoopEnabled)
+                {
+                    Vector dn = GetDirXYUnit(sides[sideCount - 1].Dir);
+                    ends[sideCount - 1] = new Point(
+                        ends[sideCount - 1].X - dn.X * loopLegMm,
+                        ends[sideCount - 1].Y - dn.Y * loopLegMm,
+                        ends[sideCount - 1].Z);
+                }
+
+                var cornerPieces = new List<RoundCornerPieceSpec>();
+
+                // internal corners only for open polyline
+                for (int c = 0; c < sideCount - 1; c++)
+                {
+                    Vector prevDir = GetDirXYUnit(sides[c].Dir);
+                    Vector nextDir = GetDirXYUnit(sides[c + 1].Dir);
+
+                    if (prevDir == null || nextDir == null)
+                        continue;
+
+                    if (!TryIntersectLinesXY(baseStart[c], sides[c].Dir, baseStart[c + 1], sides[c + 1].Dir, out Point jointXY))
+                    {
+                        jointXY = new Point(
+                            0.5 * (baseEnd[c].X + baseStart[c + 1].X),
+                            0.5 * (baseEnd[c].Y + baseStart[c + 1].Y),
+                            0.0);
+                    }
+
+                    Point prevAttach = new Point(
+                        jointXY.X - prevDir.X * loopLegMm,
+                        jointXY.Y - prevDir.Y * loopLegMm,
+                        ends[c].Z);
+
+                    Point nextAttach = new Point(
+                        jointXY.X + nextDir.X * loopLegMm,
+                        jointXY.Y + nextDir.Y * loopLegMm,
+                        starts[c + 1].Z);
+
+                    double midZ = 0.5 * (ends[c].Z + starts[c + 1].Z);
+                    Point cornerMid = new Point(jointXY.X, jointXY.Y, midZ);
+
+                    // shorten the straight round rails so the corner piece fits in
+                    ends[c] = prevAttach;
+                    starts[c + 1] = nextAttach;
+
+                    cornerPieces.Add(new RoundCornerPieceSpec
+                    {
+                        PrevAttach = prevAttach,
+                        CornerMid = cornerMid,
+                        NextAttach = nextAttach,
+                        PrevDir = prevDir,
+                        NextDir = nextDir,
+                        PrevSideIndex = c,
+                        NextSideIndex = c + 1
+                    });
+                }
+
+                var firstPieceBySide = new Beam[sideCount];
+                var lastPieceBySide = new Beam[sideCount];
+
+                // straight round rail pieces
+                for (int i = 0; i < sideCount; i++)
+                {
+                    if (Distance3D(starts[i], ends[i]) < 1.0)
+                        continue;
+
+                    var pieces = CreateRoundRailPiecesWithSplicesCollect(
+                        starts[i],
+                        ends[i],
+                        roundRailMaxLenMm,
+                        roundProfile,
+                        railMaterial,
+                        railClass,
+                        railName);
+
+                    if (pieces.Count > 0)
+                    {
+                        firstPieceBySide[i] = pieces[0];
+                        lastPieceBySide[i] = pieces[pieces.Count - 1];
+                    }
+                }
+
+                if (sideCount > 0)
+                {
+                    terminalRefs.StartRailByRow[row] = firstPieceBySide[0];
+                    terminalRefs.EndRailByRow[row] = lastPieceBySide[sideCount - 1];
+                }
+
+                // round corner loop pieces + bolted splice each end
+                foreach (RoundCornerPieceSpec cp in cornerPieces)
+                {
+                    PolyBeam pb = CreateRoundCornerLoopPiece(
+                        cp.PrevAttach,
+                        cp.CornerMid,
+                        cp.NextAttach,
+                        roundProfile,
+                        railMaterial,
+                        railClass,
+                        "ROUND RAIL CORNER");
+
+                    if (pb == null)
+                        continue;
+
+                    Beam prevSplice = CreateRailSplice(cp.PrevAttach, cp.PrevDir, InchesToMm(4.0));
+                    if (prevSplice != null && lastPieceBySide[cp.PrevSideIndex] != null)
+                    {
+                        TryCreateRoundSpliceBolts(
+                            lastPieceBySide[cp.PrevSideIndex],
+                            prevSplice,
+                            pb,
+                            cp.PrevAttach);
+                    }
+
+                    Beam nextSplice = CreateRailSplice(cp.NextAttach, cp.NextDir, InchesToMm(4.0));
+                    if (nextSplice != null && firstPieceBySide[cp.NextSideIndex] != null)
+                    {
+                        TryCreateRoundSpliceBolts(
+                            pb,
+                            nextSplice,
+                            firstPieceBySide[cp.NextSideIndex],
+                            cp.NextAttach);
+                    }
                 }
             }
+
+            return terminalRefs;
+        }
+
+        private sealed class RoundCornerPieceSpec
+        {
+            public Point PrevAttach;
+            public Point CornerMid;
+            public Point NextAttach;
+            public Vector PrevDir;
+            public Vector NextDir;
+            public int PrevSideIndex;
+            public int NextSideIndex;
+        }
+
+        private PolyBeam CreateRoundCornerLoopPiece(Point prevAttach,Point cornerMid,Point nextAttach,string profile,string material,string partClass,string partName)
+        {
+            if (prevAttach == null || cornerMid == null || nextAttach == null)
+                return null;
+
+            double cornerRadiusMm = InchesToMm(3.5); // 3-1/2"
+
+            PolyBeam pb = new PolyBeam(PolyBeam.PolyBeamTypeEnum.BEAM);
+
+            pb.Profile.ProfileString = profile;
+            pb.Material.MaterialString = material;
+            pb.Class = partClass;
+            pb.Name = partName;
+
+            pb.Position.Plane = Position.PlaneEnum.MIDDLE;
+            pb.Position.Depth = Position.DepthEnum.MIDDLE;
+            pb.Position.Rotation = Position.RotationEnum.TOP;
+
+            ContourPoint p1 = new ContourPoint(prevAttach, null);
+
+            ContourPoint p2 = new ContourPoint(
+                cornerMid,
+                new Chamfer(
+                    cornerRadiusMm,
+                    0.0,
+                    Chamfer.ChamferTypeEnum.CHAMFER_ROUNDING));
+
+            ContourPoint p3 = new ContourPoint(nextAttach, null);
+
+            pb.Contour.ContourPoints.Add(p1);
+            pb.Contour.ContourPoints.Add(p2);
+            pb.Contour.ContourPoints.Add(p3);
+
+            if (!pb.Insert())
+                return null;
+
+            pb.Modify();
+            return pb;
+        }
+
+        private List<Beam> CreateRoundRailPiecesWithSplicesCollect(
+    Point start,
+    Point end,
+    double maxLenMm,
+    string profile,
+    string material,
+    string partClass,
+    string partName)
+        {
+            var pieces = new List<Beam>();
+
+            if (start == null || end == null)
+                return pieces;
+
+            Vector v = new Vector(end.X - start.X, end.Y - start.Y, end.Z - start.Z);
+            double len = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+            if (len < 1.0)
+                return pieces;
+
+            if (maxLenMm <= 1.0 || len <= maxLenMm)
+            {
+                Beam one = CreateSingleRoundRailPiece(start, end, profile, material, partClass, partName);
+                if (one != null) pieces.Add(one);
+                return pieces;
+            }
+
+            Vector dir = new Vector(v.X / len, v.Y / len, v.Z / len);
+            int pieceCount = Math.Max(1, (int)Math.Ceiling(len / maxLenMm));
+            double pieceLen = len / pieceCount;
+
+            Beam previousPiece = null;
+            Point pieceStart = start;
+
+            for (int i = 1; i <= pieceCount; i++)
+            {
+                bool isLast = (i == pieceCount);
+
+                Point pieceEnd = isLast
+                    ? end
+                    : new Point(
+                        start.X + dir.X * (pieceLen * i),
+                        start.Y + dir.Y * (pieceLen * i),
+                        start.Z + dir.Z * (pieceLen * i));
+
+                Beam currentPiece = CreateSingleRoundRailPiece(
+                    pieceStart,
+                    pieceEnd,
+                    profile,
+                    material,
+                    partClass,
+                    partName);
+
+                if (currentPiece != null)
+                    pieces.Add(currentPiece);
+
+                if (previousPiece != null && currentPiece != null)
+                {
+                    Point splicePoint = pieceStart; // joint between previous and current
+                    Beam splice = CreateRailSplice(splicePoint, dir, InchesToMm(4.0));
+
+                    if (splice != null)
+                    {
+                        TryCreateRoundSpliceBolts(previousPiece, splice, currentPiece, splicePoint);
+                    }
+                }
+
+                if (currentPiece != null)
+                    previousPiece = currentPiece;
+
+                pieceStart = pieceEnd;
+            }
+
+            return pieces;
+        }
+
+        private Beam CreateSingleRoundRailPiece(
+    Point start,
+    Point end,
+    string profile,
+    string material,
+    string partClass,
+    string partName)
+        {
+            Beam rail = new Beam(start, end);
+
+            rail.Profile.ProfileString = profile;
+            rail.Material.MaterialString = material;
+            rail.Class = partClass;
+            rail.Name = partName;
+
+            rail.Position.Plane = Position.PlaneEnum.MIDDLE;
+            rail.Position.Depth = Position.DepthEnum.MIDDLE;
+            rail.Position.Rotation = Position.RotationEnum.TOP;
+
+            if (!rail.Insert())
+                return null;
+
+            rail.Modify();
+            return rail;
+        }
+
+        private static bool TryIntersectLinesXY(Point p1, Vector d1, Point p2, Vector d2, out Point intersection)
+        {
+            intersection = null;
+
+            double a1 = d1.X;
+            double b1 = -d2.X;
+            double c1 = p2.X - p1.X;
+
+            double a2 = d1.Y;
+            double b2 = -d2.Y;
+            double c2 = p2.Y - p1.Y;
+
+            double det = a1 * b2 - a2 * b1;
+            if (Math.Abs(det) < 1e-9)
+                return false; // parallel / nearly parallel
+
+            double t = (c1 * b2 - c2 * b1) / det;
+
+            intersection = new Point(
+                p1.X + d1.X * t,
+                p1.Y + d1.Y * t,
+                0.0);
+
+            return true;
         }
 
         private static double GetDistanceForSegment(IReadOnlyList<double> values, int segmentIndex)
@@ -1446,6 +1916,460 @@ namespace WDRailing
                 return null;
 
             return rail;
+        }
+
+        private sealed class RoundSpliceBoltSpec
+        {
+            public double BoltSizeMm;
+            public string BoltStandard;
+            public double CutLengthMm;
+            public double BoltDistXMm;
+            public double HoleToleranceMm;
+
+            public Position.PlaneEnum Plane;
+            public double PlaneOffsetMm;
+
+            public Position.RotationEnum Rotation;
+            public double RotationOffsetMm;
+
+            public Position.DepthEnum Depth;
+            public double DepthOffsetMm;
+
+            public double StartDxMm;
+        }
+
+        private static readonly RoundSpliceBoltSpec RoundSpliceBoltSpecDefault =
+            new RoundSpliceBoltSpec
+            {
+                BoltSizeMm = InchesToMm(0.25),
+                BoltStandard = "SOCKET",
+                CutLengthMm = -InchesToMm(0.75),
+                BoltDistXMm = InchesToMm(2.5),
+                HoleToleranceMm = -InchesToMm(1.0 / 16.0),
+
+                Plane = Position.PlaneEnum.MIDDLE,
+                PlaneOffsetMm = -InchesToMm(15.0 / 16.0),
+
+                Rotation = Position.RotationEnum.TOP,
+                RotationOffsetMm = 0.0,
+
+                Depth = Position.DepthEnum.MIDDLE,
+                DepthOffsetMm = 0.0,
+
+                StartDxMm = -InchesToMm(1.25)
+            };
+
+        private static readonly RoundSpliceBoltSpec RoundTSpliceBoltSpecDefault =
+            new RoundSpliceBoltSpec
+            {
+                BoltSizeMm = InchesToMm(0.25),
+                BoltStandard = "SOCKET",
+                CutLengthMm = -InchesToMm(0.75),
+                BoltDistXMm = InchesToMm(6.5),                 // 6-1/2
+                HoleToleranceMm = -InchesToMm(1.0 / 16.0),
+
+                Plane = Position.PlaneEnum.MIDDLE,
+                PlaneOffsetMm = -InchesToMm(15.0 / 16.0),
+
+                Rotation = Position.RotationEnum.TOP,
+                RotationOffsetMm = 0.0,
+
+                Depth = Position.DepthEnum.MIDDLE,
+                DepthOffsetMm = 0.0,
+
+                StartDxMm = -InchesToMm(3.25)                 // center the 6-1/2 array
+            };
+
+        private bool TryCreateRoundSpliceBolts(
+            Part leftRail,
+            Part splicePart,
+            Part rightRail,
+            Point spliceCenter)
+        {
+            if (leftRail == null || splicePart == null || rightRail == null || spliceCenter == null)
+                return false;
+
+            RoundSpliceBoltSpec spec = RoundSpliceBoltSpecDefault;
+
+            WorkPlaneHandler wph = _model.GetWorkPlaneHandler();
+            TransformationPlane savedPlane = wph.GetCurrentTransformationPlane();
+
+            try
+            {
+                CoordinateSystem partCs = splicePart.GetCoordinateSystem();
+
+                CoordinateSystem boltCs = new CoordinateSystem(
+                    spliceCenter,
+                    partCs.AxisX,
+                    partCs.AxisY);
+
+                wph.SetCurrentTransformationPlane(new TransformationPlane(boltCs));
+
+                BoltXYList bolt = new BoltXYList();
+
+                bolt.PartToBeBolted = splicePart;
+                bolt.PartToBoltTo = leftRail;
+                bolt.AddOtherPartToBolt(rightRail);
+
+                bolt.Bolt = true;
+                bolt.BoltType = BoltGroup.BoltTypeEnum.BOLT_TYPE_SITE;
+                bolt.ConnectAssemblies = false;
+
+                bolt.BoltSize = spec.BoltSizeMm;
+                bolt.BoltStandard = spec.BoltStandard;
+                bolt.CutLength = spec.CutLengthMm;
+                bolt.Tolerance = spec.HoleToleranceMm;
+                bolt.ThreadInMaterial = BoltGroup.BoltThreadInMaterialEnum.THREAD_IN_MATERIAL_NO;
+
+                bolt.Washer1 = false;
+                bolt.Washer2 = false;
+                bolt.Washer3 = false;
+                bolt.Nut1 = false;
+                bolt.Nut2 = false;
+
+                bolt.Hole1 = true;
+                bolt.Hole2 = true;
+                bolt.Hole3 = true;
+                bolt.Hole4 = false;
+                bolt.Hole5 = false;
+
+                // Handle starts at splice center
+                bolt.FirstPosition = new Point(0.0, 0.0, 0.0);
+                bolt.SecondPosition = new Point(10.0, 0.0, 0.0);
+
+                // Center group from splice middle
+                bolt.StartPointOffset = new Offset();
+                bolt.StartPointOffset.Dx = spec.StartDxMm;
+                bolt.StartPointOffset.Dy = 0.0;
+                bolt.StartPointOffset.Dz = 0.0;
+
+                // 2 bolts in one group
+                bolt.AddBoltDistX(0.0);
+                bolt.AddBoltDistX(spec.BoltDistXMm);
+
+                // one row only
+                bolt.AddBoltDistY(0.0);
+                bolt.AddBoltDistY(0.0);
+
+                bolt.Position.Plane = spec.Plane;
+                bolt.Position.PlaneOffset = spec.PlaneOffsetMm;
+                bolt.Position.Rotation = spec.Rotation;
+                bolt.Position.RotationOffset = spec.RotationOffsetMm;
+                bolt.Position.Depth = spec.Depth;
+                bolt.Position.DepthOffset = spec.DepthOffsetMm;
+
+                return bolt.Insert();
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                wph.SetCurrentTransformationPlane(savedPlane);
+            }
+        }
+
+        private bool TryCreateRoundRpcTopRailBolt(
+    Part topRailPart,
+    Part rpcPart,
+    Point boltCenter,
+    Vector rpcBoltDir)
+        {
+            if (topRailPart == null || rpcPart == null || boltCenter == null || rpcBoltDir == null)
+                return false;
+
+            WorkPlaneHandler wph = _model.GetWorkPlaneHandler();
+            TransformationPlane savedPlane = wph.GetCurrentTransformationPlane();
+
+            try
+            {
+                CoordinateSystem railCs = topRailPart.GetCoordinateSystem();
+
+                Vector axisX = railCs.AxisX;
+                double xLen = Math.Sqrt(axisX.X * axisX.X + axisX.Y * axisX.Y + axisX.Z * axisX.Z);
+                if (xLen < 1e-9)
+                    return false;
+
+                axisX = new Vector(
+                    axisX.X / xLen,
+                    axisX.Y / xLen,
+                    axisX.Z / xLen);
+
+                Vector axisY = rpcBoltDir;
+                double yLen = Math.Sqrt(axisY.X * axisY.X + axisY.Y * axisY.Y + axisY.Z * axisY.Z);
+                if (yLen < 1e-9)
+                    return false;
+
+                axisY = new Vector(
+                    axisY.X / yLen,
+                    axisY.Y / yLen,
+                    axisY.Z / yLen);
+
+                // X = along railing
+                // Y = toward framing/RPC side
+                CoordinateSystem boltCs = new CoordinateSystem(
+                    boltCenter,
+                    axisX,
+                    axisY);
+
+                wph.SetCurrentTransformationPlane(new TransformationPlane(boltCs));
+
+                BoltXYList bolt = new BoltXYList();
+
+                bolt.PartToBeBolted = rpcPart;
+                bolt.PartToBoltTo = topRailPart;
+
+                bolt.Bolt = true;
+                bolt.BoltType = BoltGroup.BoltTypeEnum.BOLT_TYPE_SITE;
+                bolt.ConnectAssemblies = false;
+
+                bolt.BoltSize = RoundSpliceBoltSpecDefault.BoltSizeMm;
+                bolt.BoltStandard = RoundSpliceBoltSpecDefault.BoltStandard;
+                bolt.CutLength = RoundSpliceBoltSpecDefault.CutLengthMm;
+                bolt.Tolerance = RoundSpliceBoltSpecDefault.HoleToleranceMm;
+                bolt.ThreadInMaterial = BoltGroup.BoltThreadInMaterialEnum.THREAD_IN_MATERIAL_NO;
+
+                bolt.Washer1 = false;
+                bolt.Washer2 = false;
+                bolt.Washer3 = false;
+                bolt.Nut1 = false;
+                bolt.Nut2 = false;
+
+                bolt.Hole1 = true;
+                bolt.Hole2 = false;
+                bolt.Hole3 = false;
+                bolt.Hole4 = false;
+                bolt.Hole5 = false;
+
+                // Handle runs ALONG the railing now
+                bolt.FirstPosition = new Point(0.0, 0.0, 0.0);
+                bolt.SecondPosition = new Point(10.0, 0.0, 0.0);
+
+                bolt.StartPointOffset = new Offset();
+                bolt.StartPointOffset.Dx = 0.0;
+                bolt.StartPointOffset.Dy = 0.0;
+                bolt.StartPointOffset.Dz = 0.0;
+
+                // one bolt only
+                bolt.AddBoltDistX(0.0);
+                bolt.AddBoltDistY(0.0);
+
+                bolt.Position.Plane = Position.PlaneEnum.MIDDLE;
+                bolt.Position.PlaneOffset = InchesToMm(1.25);   // POSITIVE 15/16
+                bolt.Position.Rotation = Position.RotationEnum.BELOW;  // BELOW
+                bolt.Position.RotationOffset = 0.0;
+                bolt.Position.Depth = Position.DepthEnum.MIDDLE;
+                bolt.Position.DepthOffset = 0.0;
+
+                return bolt.Insert();
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                wph.SetCurrentTransformationPlane(savedPlane);
+            }
+        }
+
+        private bool TryCreateRoundRpcPostBolt(
+    Part postPart,
+    Part rpcPart,
+    Point boltCenter,
+    Vector railDir,
+    Vector rpcBoltDir)
+        {
+            if (postPart == null || rpcPart == null || boltCenter == null || railDir == null || rpcBoltDir == null)
+                return false;
+
+            WorkPlaneHandler wph = _model.GetWorkPlaneHandler();
+            TransformationPlane savedPlane = wph.GetCurrentTransformationPlane();
+
+            try
+            {
+                Vector axisX = GetDirXYUnit(railDir);
+                double xLen = Math.Sqrt(axisX.X * axisX.X + axisX.Y * axisX.Y + axisX.Z * axisX.Z);
+                if (xLen < 1e-9)
+                    return false;
+
+                axisX = new Vector(
+                    axisX.X / xLen,
+                    axisX.Y / xLen,
+                    axisX.Z / xLen);
+
+                Vector axisY = rpcBoltDir;
+                double yLen = Math.Sqrt(axisY.X * axisY.X + axisY.Y * axisY.Y + axisY.Z * axisY.Z);
+                if (yLen < 1e-9)
+                    return false;
+
+                axisY = new Vector(
+                    axisY.X / yLen,
+                    axisY.Y / yLen,
+                    axisY.Z / yLen);
+
+                // X = along railing
+                // Y = toward framing/RPC side
+                CoordinateSystem boltCs = new CoordinateSystem(
+                    boltCenter,
+                    axisX,
+                    axisY);
+
+                wph.SetCurrentTransformationPlane(new TransformationPlane(boltCs));
+
+                BoltXYList bolt = new BoltXYList();
+
+                bolt.PartToBeBolted = rpcPart;
+                bolt.PartToBoltTo = postPart;
+
+                bolt.Bolt = true;
+                bolt.BoltType = BoltGroup.BoltTypeEnum.BOLT_TYPE_SITE;
+                bolt.ConnectAssemblies = false;
+
+                bolt.BoltSize = RoundSpliceBoltSpecDefault.BoltSizeMm;
+                bolt.BoltStandard = RoundSpliceBoltSpecDefault.BoltStandard;
+                bolt.CutLength = RoundSpliceBoltSpecDefault.CutLengthMm;
+                bolt.Tolerance = RoundSpliceBoltSpecDefault.HoleToleranceMm;
+                bolt.ThreadInMaterial = BoltGroup.BoltThreadInMaterialEnum.THREAD_IN_MATERIAL_NO;
+
+                bolt.Washer1 = false;
+                bolt.Washer2 = false;
+                bolt.Washer3 = false;
+                bolt.Nut1 = false;
+                bolt.Nut2 = false;
+
+                bolt.Hole1 = true;
+                bolt.Hole2 = false;
+                bolt.Hole3 = false;
+                bolt.Hole4 = false;
+                bolt.Hole5 = false;
+
+                // Handle runs along railing
+                bolt.FirstPosition = new Point(0.0, 0.0, 0.0);
+                bolt.SecondPosition = new Point(10.0, 0.0, 0.0);
+
+                bolt.StartPointOffset = new Offset();
+                bolt.StartPointOffset.Dx = 0.0;
+                bolt.StartPointOffset.Dy = 0.0;
+                bolt.StartPointOffset.Dz = 0.0;
+
+                // one bolt only
+                bolt.AddBoltDistX(0.0);
+                bolt.AddBoltDistY(0.0);
+
+                // Same face/orientation behavior as the RPC top-rail bolt
+                bolt.Position.Plane = Position.PlaneEnum.MIDDLE;
+                bolt.Position.PlaneOffset = InchesToMm(1.25);
+                bolt.Position.Rotation = Position.RotationEnum.BELOW;
+                bolt.Position.RotationOffset = 0.0;
+                bolt.Position.Depth = Position.DepthEnum.MIDDLE;
+                bolt.Position.DepthOffset = 0.0;
+
+                return bolt.Insert();
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                wph.SetCurrentTransformationPlane(savedPlane);
+            }
+        }
+
+        private bool TryCreateRoundTSpliceBolts(
+    Part upperPart,
+    Part splicePart,
+    Part lowerPart,
+    Point spliceCenter)
+        {
+            if (upperPart == null || splicePart == null || lowerPart == null || spliceCenter == null)
+                return false;
+
+            RoundSpliceBoltSpec spec = RoundTSpliceBoltSpecDefault;
+
+            WorkPlaneHandler wph = _model.GetWorkPlaneHandler();
+            TransformationPlane savedPlane = wph.GetCurrentTransformationPlane();
+
+            try
+            {
+                CoordinateSystem partCs = splicePart.GetCoordinateSystem();
+
+                CoordinateSystem boltCs = new CoordinateSystem(
+                    spliceCenter,
+                    partCs.AxisX,
+                    partCs.AxisY);
+
+                wph.SetCurrentTransformationPlane(new TransformationPlane(boltCs));
+
+                BoltXYList bolt = new BoltXYList();
+
+                bolt.PartToBeBolted = splicePart;
+                bolt.PartToBoltTo = upperPart;
+                bolt.AddOtherPartToBolt(lowerPart);
+
+                bolt.Bolt = true;
+                bolt.BoltType = BoltGroup.BoltTypeEnum.BOLT_TYPE_SITE;
+                bolt.ConnectAssemblies = false;
+
+                bolt.BoltSize = spec.BoltSizeMm;
+                bolt.BoltStandard = spec.BoltStandard;
+                bolt.CutLength = spec.CutLengthMm;
+                bolt.Tolerance = spec.HoleToleranceMm;
+                bolt.ThreadInMaterial = BoltGroup.BoltThreadInMaterialEnum.THREAD_IN_MATERIAL_NO;
+
+                bolt.Washer1 = false;
+                bolt.Washer2 = false;
+                bolt.Washer3 = false;
+                bolt.Nut1 = false;
+                bolt.Nut2 = false;
+
+                bolt.Hole1 = true;
+                bolt.Hole2 = true;
+                bolt.Hole3 = true;
+                bolt.Hole4 = false;
+                bolt.Hole5 = false;
+
+                // vertical handle from splice center
+                bolt.FirstPosition = new Point(0.0, 0.0, 0.0);
+                bolt.SecondPosition = new Point(10.0, 0.0, 0.0);
+
+                bolt.StartPointOffset = new Offset();
+                bolt.StartPointOffset.Dx = spec.StartDxMm;
+                bolt.StartPointOffset.Dy = 0.0;
+                bolt.StartPointOffset.Dz = 0.0;
+
+                // 2 bolts in one vertical array
+                bolt.AddBoltDistX(0.0);
+                bolt.AddBoltDistX(spec.BoltDistXMm);
+
+                bolt.AddBoltDistY(0.0);
+                bolt.AddBoltDistY(0.0);
+
+                bolt.Position.Plane = spec.Plane;
+                bolt.Position.PlaneOffset = spec.PlaneOffsetMm;
+                bolt.Position.Rotation = spec.Rotation;
+                bolt.Position.RotationOffset = spec.RotationOffsetMm;
+                bolt.Position.Depth = spec.Depth;
+                bolt.Position.DepthOffset = spec.DepthOffsetMm;
+
+                return bolt.Insert();
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                wph.SetCurrentTransformationPlane(savedPlane);
+            }
+        }
+
+        private sealed class RoundTerminalRailRefs
+        {
+            public Beam[] StartRailByRow;
+            public Beam[] EndRailByRow;
         }
 
         private bool KeepWithPrompt(string msg)

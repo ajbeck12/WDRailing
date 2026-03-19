@@ -102,6 +102,9 @@ namespace WDRailing
         [StructuresField("RR_TOP_IN")] public string RoundRailFromTopIn;
         [StructuresField("RR_COUNT")] public string RoundRailCount;
         [StructuresField("RR_SPACE_IN")] public string RoundRailSpacingIn;
-
+        [StructuresField("RR_ST_LOOP")] public string RoundStartLoopEnabled;
+        [StructuresField("RR_END_LOOP")] public string RoundEndLoopEnabled;
+        [StructuresField("RAIL_MAX_LEN_IN")] public string RailMaxLenIn;
+        [StructuresField("RR_MAX_LEN_IN")] public string RoundRailMaxLenIn;
     }
 }

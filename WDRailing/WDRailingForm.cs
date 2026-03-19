@@ -55,6 +55,9 @@ namespace WDRailing
         private TextBox _tbRoundRailFromTopIn;
         private TextBox _tbRoundRailCount;
         private TextBox _tbRoundRailSpacingIn;
+        private ComboBox _cbRoundStartLoopEnabled, _cbRoundEndLoopEnabled;
+        private TextBox _tbRailMaxLenIn;
+        private TextBox _tbRoundRailMaxLenIn;
         public WDRailingDialog()
         {
             BuildUi();
@@ -174,6 +177,15 @@ namespace WDRailing
             _tbRoundRailFromTopIn = NewText(); BindString(_tbRoundRailFromTopIn, "RR_TOP_IN");
             _tbRoundRailCount = NewText(); BindString(_tbRoundRailCount, "RR_COUNT");
             _tbRoundRailSpacingIn = NewText(); BindString(_tbRoundRailSpacingIn, "RR_SPACE_IN");
+            _cbRoundStartLoopEnabled = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cbRoundStartLoopEnabled.Items.AddRange(new object[] { "0", "1" });
+            BindString(_cbRoundStartLoopEnabled, "RR_ST_LOOP", "SelectedItem");
+
+            _cbRoundEndLoopEnabled = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+            _cbRoundEndLoopEnabled.Items.AddRange(new object[] { "0", "1" });
+            BindString(_cbRoundEndLoopEnabled, "RR_END_LOOP", "SelectedItem");
+            _tbRailMaxLenIn = NewText(); BindString(_tbRailMaxLenIn, "RAIL_MAX_LEN_IN");
+            _tbRoundRailMaxLenIn = NewText(); BindString(_tbRoundRailMaxLenIn, "RR_MAX_LEN_IN");
 
             // ---------------- Formatting hooks ----------------
 
@@ -201,6 +213,8 @@ namespace WDRailing
             HookFmt(_tbRoundRailEndOffsetIn, true);
             HookFmt(_tbRoundRailFromTopIn, true);
             HookFmt(_tbRoundRailSpacingIn, false);
+            HookFmt(_tbRailMaxLenIn, false);
+            HookFmt(_tbRoundRailMaxLenIn, false);
 
             // ---------------- Tabs ----------------
 
@@ -256,6 +270,7 @@ namespace WDRailing
                 var tab = NewTab("Square Rail", out var table);
                 int r = 0;
                 AddRow(table, r++, "Create rail (0/1)", _cbRailEnabled);
+                AddRow(table, r++, "Rail max length", _tbRailMaxLenIn);
                 AddRow(table, r++, "Rail start offset", _tbRailStartOffsetIn);
                 AddRow(table, r++, "Rail end offset", _tbRailEndOffsetIn);
                 AddRow(table, r++, "Rail center down from top of post", _tbRailFromTopIn);
@@ -272,12 +287,15 @@ namespace WDRailing
                 var tab = NewTab("Round Rail", out var table);
                 int r = 0;
                 AddRow(table, r++, "Round rail profile", _tbRoundRailProfile);
+                AddRow(table, r++, "Round rail max length", _tbRoundRailMaxLenIn);
                 AddRow(table, r++, "Round rail start offset", _tbRoundRailStartOffsetIn);
                 AddRow(table, r++, "Round rail end offset", _tbRoundRailEndOffsetIn);
                 AddRow(table, r++, "Round rail center down from top of post", _tbRoundRailFromTopIn);
                 AddRow(table, r++, "Round rail count", _tbRoundRailCount);
                 AddRow(table, r++, "Round rail spacing (c/c)", _tbRoundRailSpacingIn);
                 tabs.TabPages.Add(tab);
+                AddRow(table, r++, "Round start end loop (0/1)", _cbRoundStartLoopEnabled);
+                AddRow(table, r++, "Round end end loop (0/1)", _cbRoundEndLoopEnabled);
             }
 
             // Seat/Post holes tab
@@ -425,6 +443,13 @@ namespace WDRailing
 
             if ((_cbRailMode.SelectedItem == null && string.IsNullOrWhiteSpace(_cbRailMode.Text)) && !string.IsNullOrWhiteSpace(_cfg.RailMode))
                 _cbRailMode.SelectedItem = _cfg.RailMode.Trim().ToUpperInvariant();
+            if ((_cbRoundStartLoopEnabled.SelectedItem == null && string.IsNullOrWhiteSpace(_cbRoundStartLoopEnabled.Text)) &&
+    !string.IsNullOrWhiteSpace(_cfg.RoundStartLoopEnabled))
+                _cbRoundStartLoopEnabled.SelectedItem = _cfg.RoundStartLoopEnabled.Trim();
+
+            if ((_cbRoundEndLoopEnabled.SelectedItem == null && string.IsNullOrWhiteSpace(_cbRoundEndLoopEnabled.Text)) &&
+                !string.IsNullOrWhiteSpace(_cfg.RoundEndLoopEnabled))
+                _cbRoundEndLoopEnabled.SelectedItem = _cfg.RoundEndLoopEnabled.Trim();
 
             SetIfEmpty(_tbRoundRailProfile, _cfg.RoundRailProfile);
             SetIfEmpty(_tbRoundRailStartOffsetIn, _cfg.RoundRailStartOffsetIn);
@@ -432,6 +457,8 @@ namespace WDRailing
             SetIfEmpty(_tbRoundRailFromTopIn, _cfg.RoundRailFromTopIn);
             SetIfEmpty(_tbRoundRailCount, _cfg.RoundRailCount);
             SetIfEmpty(_tbRoundRailSpacingIn, _cfg.RoundRailSpacingIn);
+            SetIfEmpty(_tbRailMaxLenIn, _cfg.RailMaxLenIn);
+            SetIfEmpty(_tbRoundRailMaxLenIn, _cfg.RoundRailMaxLenIn);
         }
 
         private void FormatAllDistances()
@@ -461,6 +488,8 @@ namespace WDRailing
             Fmt(_tbRoundRailEndOffsetIn, true);
             Fmt(_tbRoundRailFromTopIn, true);
             Fmt(_tbRoundRailSpacingIn, false);
+            Fmt(_tbRailMaxLenIn, false);
+            Fmt(_tbRoundRailMaxLenIn, false);
         }
 
         private void HookFmt(TextBox tb, bool allowNeg) => tb.Leave += (s, e) => Fmt(tb, allowNeg);
